@@ -1,0 +1,50 @@
+{
+  "skyflow": {
+    "vault_url": "https://YOUR_VAULT_URL.vault.skyflowapis.com",
+    "bearer_token": "",
+    "vaults": [
+      {
+        "name": "NAME",
+        "id": "YOUR_NAME_VAULT_ID",
+        "column": "name"
+      },
+      {
+        "name": "ID",
+        "id": "YOUR_ID_VAULT_ID",
+        "column": "id"
+      },
+      {
+        "name": "DOB",
+        "id": "YOUR_DOB_VAULT_ID",
+        "column": "dob"
+      },
+      {
+        "name": "SSN",
+        "id": "YOUR_SSN_VAULT_ID",
+        "column": "ssn"
+      }
+    ]
+  },
+  "snowflake": {
+    "user": "",
+    "password": "",
+    "account": "YOUR_ACCOUNT_IDENTIFIER",
+    "warehouse": "YOUR_WAREHOUSE",
+    "database": "YOUR_DATABASE",
+    "schema": "PUBLIC",
+    "role": "YOUR_ROLE",
+    "fetch_size": 100000,
+    "query_mode": "simple"
+  },
+  "csv": {
+    "data_file": "../data/patient_data.csv",
+    "token_file": "../data/patient_tokens.csv"
+  },
+  "performance": {
+    "batch_size": 300,
+    "max_concurrency": 32,
+    "max_records": 100000,
+    "append_suffix": true,
+    "base_delay_ms": 0
+  }
+}

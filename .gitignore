@@ -1,0 +1,12 @@
+# Configuration with sensitive data
+config.json
+
+# Compiled binary
+skyflow-loader
+
+# Data files
+*.csv
+
+# Logs
+logs/
+*.log
