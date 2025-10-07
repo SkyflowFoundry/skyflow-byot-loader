@@ -11,6 +11,7 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -371,16 +372,16 @@ type SnowflakeDataSource struct {
 
 // Connect establishes connection to Snowflake
 func (s *SnowflakeDataSource) Connect() error {
-	// Build DSN (Data Source Name)
+	// Build DSN (Data Source Name) with URL encoding for special characters
 	// Format: user:password@account/database/schema?warehouse=wh&role=role
 	dsn := fmt.Sprintf("%s:%s@%s/%s/%s?warehouse=%s&role=%s",
-		s.Config.User,
-		s.Config.Password,
+		url.QueryEscape(s.Config.User),
+		url.QueryEscape(s.Config.Password),
 		s.Config.Account,
 		s.Config.Database,
 		s.Config.Schema,
-		s.Config.Warehouse,
-		s.Config.Role,
+		url.QueryEscape(s.Config.Warehouse),
+		url.QueryEscape(s.Config.Role),
 	)
 
 	db, err := sql.Open("snowflake", dsn)
