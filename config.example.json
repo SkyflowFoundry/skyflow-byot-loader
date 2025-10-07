@@ -28,6 +28,7 @@
   "snowflake": {
     "user": "",
     "password": "",
+    "authenticator": "",
     "account": "YOUR_ACCOUNT_IDENTIFIER",
     "warehouse": "YOUR_WAREHOUSE",
     "database": "YOUR_DATABASE",

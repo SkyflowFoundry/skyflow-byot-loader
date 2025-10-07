@@ -140,7 +140,11 @@ By default, the loader looks for `config.json` in the current directory. You can
 
 #### Snowflake
 - `user` - Snowflake username (optional - can use CLI flag or interactive prompt)
-- `password` - Snowflake password (optional - can use CLI flag or interactive prompt)
+- `password` - Snowflake password or PAT token (optional - can use CLI flag or interactive prompt)
+- `authenticator` - Authentication method (optional):
+  - `""` (empty/default) - Standard username/password
+  - `"programmatic_access_token"` - Use Programmatic Access Token (PAT)
+  - `"SNOWFLAKE_JWT"` - Use key-pair authentication
 - `account` - Account identifier (e.g., `ORG-ACCOUNT`)
 - `warehouse` - Warehouse name
 - `database` - Database name
@@ -259,6 +263,82 @@ Once you've configured `config.json`, running the loader is simple:
 # Override specific settings (token optional if in config)
 ./skyflow-loader -concurrency 64 -max-records 50000
 ```
+
+---
+
+## Snowflake Authentication Methods
+
+The loader supports multiple Snowflake authentication methods:
+
+### 1. Username/Password (Default)
+Standard authentication with username and password.
+
+**Config:**
+```json
+{
+  "snowflake": {
+    "user": "your_user",
+    "password": "your_password",
+    "authenticator": ""
+  }
+}
+```
+
+**CLI:**
+```bash
+./skyflow-loader -source snowflake -sf-user "user" -sf-password "pass"
+```
+
+### 2. Programmatic Access Token (PAT) - Recommended for EC2/SSH
+Use Snowflake's Programmatic Access Tokens for secure, long-lived authentication without exposing passwords.
+
+**How to generate PAT:**
+1. Log into Snowflake UI
+2. Go to your user profile → "Programmatic Access Tokens"
+3. Click "Generate new token"
+4. Copy the token
+
+**Config:**
+```json
+{
+  "snowflake": {
+    "user": "your_user",
+    "password": "YOUR_PAT_TOKEN_HERE",
+    "authenticator": "programmatic_access_token"
+  }
+}
+```
+
+**CLI:**
+```bash
+./skyflow-loader -source snowflake \
+  -sf-user "user" \
+  -sf-password "YOUR_PAT_TOKEN" \
+  -sf-authenticator "programmatic_access_token"
+```
+
+**Interactive (recommended):**
+```bash
+./skyflow-loader -source snowflake -sf-authenticator "programmatic_access_token"
+# Will prompt: ❄️  Enter Snowflake username: your_user
+# Will prompt: ❄️  Enter Snowflake password (or PAT token): [paste PAT token]
+```
+
+### 3. Key-Pair Authentication (JWT)
+Use RSA key pairs for the most secure authentication method.
+
+**Config:**
+```json
+{
+  "snowflake": {
+    "user": "your_user",
+    "password": "",
+    "authenticator": "SNOWFLAKE_JWT"
+  }
+}
+```
+
+> **Note:** Key-pair authentication requires additional configuration (private key file). See [Snowflake documentation](https://docs.snowflake.com/en/user-guide/key-pair-auth) for setup.
 
 ---
 
@@ -434,7 +514,8 @@ wait
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-sf-user` | *(from config or prompt)* | Snowflake username |
-| `-sf-password` | *(from config or prompt)* | Snowflake password |
+| `-sf-password` | *(from config or prompt)* | Snowflake password or PAT token |
+| `-sf-authenticator` | *(from config, default: snowflake)* | Auth method: `snowflake`, `programmatic_access_token`, `SNOWFLAKE_JWT` |
 | `-sf-account` | `JYSROBN-PROVIDER_1` | Snowflake account identifier |
 | `-sf-warehouse` | `APP_WH` | Snowflake warehouse |
 | `-sf-database` | `SKYFLOW_DEMO` | Snowflake database |

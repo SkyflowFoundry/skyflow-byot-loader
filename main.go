@@ -38,15 +38,16 @@ type SkyflowConfig struct {
 }
 
 type SnowflakeFileConfig struct {
-	User      string `json:"user"`
-	Password  string `json:"password"`
-	Account   string `json:"account"`
-	Warehouse string `json:"warehouse"`
-	Database  string `json:"database"`
-	Schema    string `json:"schema"`
-	Role      string `json:"role"`
-	FetchSize int    `json:"fetch_size"`
-	QueryMode string `json:"query_mode"`
+	User          string `json:"user"`
+	Password      string `json:"password"`
+	Authenticator string `json:"authenticator"`
+	Account       string `json:"account"`
+	Warehouse     string `json:"warehouse"`
+	Database      string `json:"database"`
+	Schema        string `json:"schema"`
+	Role          string `json:"role"`
+	FetchSize     int    `json:"fetch_size"`
+	QueryMode     string `json:"query_mode"`
 }
 
 type CSVConfig struct {
@@ -80,15 +81,16 @@ type Config struct {
 
 // Snowflake configuration
 type SnowflakeConfig struct {
-	User      string
-	Password  string
-	Account   string
-	Warehouse string
-	Database  string
-	Schema    string
-	Role      string
-	FetchSize int
-	QueryMode string // "simple" or "union"
+	User          string
+	Password      string
+	Authenticator string // "snowflake" (default), "programmatic_access_token", "SNOWFLAKE_JWT", etc.
+	Account       string
+	Warehouse     string
+	Database      string
+	Schema        string
+	Role          string
+	FetchSize     int
+	QueryMode     string // "simple" or "union"
 }
 
 // Vault configuration
@@ -373,7 +375,7 @@ type SnowflakeDataSource struct {
 // Connect establishes connection to Snowflake
 func (s *SnowflakeDataSource) Connect() error {
 	// Build DSN (Data Source Name) with URL encoding for special characters
-	// Format: user:password@account/database/schema?warehouse=wh&role=role
+	// Format: user:password@account/database/schema?warehouse=wh&role=role&authenticator=type
 	dsn := fmt.Sprintf("%s:%s@%s/%s/%s?warehouse=%s&role=%s",
 		url.QueryEscape(s.Config.User),
 		url.QueryEscape(s.Config.Password),
@@ -383,6 +385,11 @@ func (s *SnowflakeDataSource) Connect() error {
 		url.QueryEscape(s.Config.Warehouse),
 		url.QueryEscape(s.Config.Role),
 	)
+
+	// Add authenticator if specified (e.g., "programmatic_access_token")
+	if s.Config.Authenticator != "" {
+		dsn += fmt.Sprintf("&authenticator=%s", url.QueryEscape(s.Config.Authenticator))
+	}
 
 	db, err := sql.Open("snowflake", dsn)
 	if err != nil {
@@ -1250,7 +1257,8 @@ func main() {
 
 	// Snowflake override flags
 	sfUser := flag.String("sf-user", "", "Snowflake user (overrides config)")
-	sfPassword := flag.String("sf-password", "", "Snowflake password (overrides config)")
+	sfPassword := flag.String("sf-password", "", "Snowflake password or PAT token (overrides config)")
+	sfAuthenticator := flag.String("sf-authenticator", "", "Snowflake authenticator: snowflake, programmatic_access_token, SNOWFLAKE_JWT (overrides config)")
 	sfAccount := flag.String("sf-account", "", "Snowflake account (overrides config)")
 	sfWarehouse := flag.String("sf-warehouse", "", "Snowflake warehouse (overrides config)")
 	sfDatabase := flag.String("sf-database", "", "Snowflake database (overrides config)")
@@ -1355,13 +1363,13 @@ func main() {
 
 		// Prompt for Snowflake password if missing
 		if finalSnowflakePassword == "" {
-			password, err := promptForPassword("❄️  Enter Snowflake password: ")
+			password, err := promptForPassword("❄️  Enter Snowflake password (or PAT token): ")
 			if err != nil {
 				fmt.Printf("❌ Error reading Snowflake password: %v\n", err)
 				os.Exit(1)
 			}
 			if password == "" {
-				fmt.Println("❌ Error: Snowflake password is required when using Snowflake data source")
+				fmt.Println("❌ Error: Snowflake password/token is required when using Snowflake data source")
 				os.Exit(1)
 			}
 			finalSnowflakePassword = password
@@ -1381,15 +1389,16 @@ func main() {
 		ProgressInterval: 1000,
 		BaseRequestDelay: time.Duration(overrideInt(*baseDelay, fileConfig.Performance.BaseDelayMs, -1)) * time.Millisecond,
 		SnowflakeConfig: SnowflakeConfig{
-			User:      finalSnowflakeUser,
-			Password:  finalSnowflakePassword,
-			Account:   overrideString(*sfAccount, fileConfig.Snowflake.Account),
-			Warehouse: overrideString(*sfWarehouse, fileConfig.Snowflake.Warehouse),
-			Database:  overrideString(*sfDatabase, fileConfig.Snowflake.Database),
-			Schema:    overrideString(*sfSchema, fileConfig.Snowflake.Schema),
-			Role:      overrideString(*sfRole, fileConfig.Snowflake.Role),
-			FetchSize: overrideInt(*sfFetchSize, fileConfig.Snowflake.FetchSize, 0),
-			QueryMode: overrideString(*sfQueryMode, fileConfig.Snowflake.QueryMode),
+			User:          finalSnowflakeUser,
+			Password:      finalSnowflakePassword,
+			Authenticator: overrideString(*sfAuthenticator, fileConfig.Snowflake.Authenticator),
+			Account:       overrideString(*sfAccount, fileConfig.Snowflake.Account),
+			Warehouse:     overrideString(*sfWarehouse, fileConfig.Snowflake.Warehouse),
+			Database:      overrideString(*sfDatabase, fileConfig.Snowflake.Database),
+			Schema:        overrideString(*sfSchema, fileConfig.Snowflake.Schema),
+			Role:          overrideString(*sfRole, fileConfig.Snowflake.Role),
+			FetchSize:     overrideInt(*sfFetchSize, fileConfig.Snowflake.FetchSize, 0),
+			QueryMode:     overrideString(*sfQueryMode, fileConfig.Snowflake.QueryMode),
 		},
 	}
 
