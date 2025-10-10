@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,8 +52,7 @@ type SnowflakeFileConfig struct {
 }
 
 type CSVConfig struct {
-	DataFile  string `json:"data_file"`
-	TokenFile string `json:"token_file"`
+	DataDirectory string `json:"data_directory"`
 }
 
 type PerformanceConfig struct {
@@ -72,8 +72,7 @@ type Config struct {
 	MaxRecords         int
 	AppendSuffix       bool
 	DataSource         string // "csv" or "snowflake"
-	DataFile           string
-	TokenFile          string
+	DataDirectory      string
 	ProgressInterval   int
 	BaseRequestDelay   time.Duration
 	SnowflakeConfig    SnowflakeConfig
@@ -113,22 +112,43 @@ type DataSource interface {
 	ReadRecords(vaultConfig VaultConfig, maxRecords int) ([]Record, error)
 }
 
+// BatchError captures details about a failed batch for error logging
+type BatchError struct {
+	BatchNumber int       `json:"batch_number"`
+	Records     []Record  `json:"records"`
+	Error       string    `json:"error"`
+	StatusCode  int       `json:"status_code,omitempty"`
+	Timestamp   time.Time `json:"timestamp"`
+}
+
 // Performance metrics with atomic operations for thread safety
 type Metrics struct {
-	VaultName            string
-	TotalRecords         int64
-	SuccessfulBatches    int64
-	FailedBatches        int64
-	SnowflakeFetchTime   int64 // nanoseconds
-	RecordCreationTime   int64
-	SuffixGenTime        int64
-	PayloadCreationTime  int64
+	VaultName             string
+	TotalRecords          int64
+	SuccessfulBatches     int64
+	FailedBatches         int64
+	RateLimited429        int64 // Total 429 responses received (including during retries)
+	RetriedSuccesses      int64 // Batches that succeeded after retry
+	ImmediateSuccesses    int64 // Batches that succeeded on first attempt
+	ServerErrors5xx       int64 // Count of 5xx server errors
+	ActiveWorkers         int64 // Currently executing workers
+	ActiveRequests        int64 // HTTP requests in flight
+	TotalRequests         int64 // Total HTTP requests made
+	TotalAPILatency       int64 // Cumulative API response time in nanoseconds
+	MinAPILatency         int64 // Minimum API response time in nanoseconds
+	MaxAPILatency         int64 // Maximum API response time in nanoseconds
+	SnowflakeFetchTime    int64 // nanoseconds
+	RecordCreationTime    int64
+	SuffixGenTime         int64
+	PayloadCreationTime   int64
 	JSONSerializationTime int64
-	BaseDelayTime        int64
-	APICallTime          int64
-	RetryDelayTime       int64
-	StartTime            time.Time
-	EndTime              time.Time
+	BaseDelayTime         int64
+	APICallTime           int64
+	RetryDelayTime        int64
+	StartTime             time.Time
+	EndTime               time.Time
+	BatchErrors           []BatchError // Thread-safe: only append, protected by mutex
+	BatchErrorsMutex      sync.Mutex
 }
 
 func (m *Metrics) AddRecord() {
@@ -208,11 +228,16 @@ var bufferPool = sync.Pool{
 }
 
 // Optimized HTTP client with connection pooling
-func createHTTPClient() *http.Client {
+// maxConns: maximum connections to allow (0 = use default of 100)
+func createHTTPClient(maxConns int) *http.Client {
+	if maxConns <= 0 {
+		maxConns = 100
+	}
+
 	transport := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 100,
-		MaxConnsPerHost:     100,
+		MaxIdleConns:        maxConns,
+		MaxIdleConnsPerHost: maxConns,
+		MaxConnsPerHost:     maxConns,
 		IdleConnTimeout:     90 * time.Second,
 		DisableCompression:  false,
 		DisableKeepAlives:   false,
@@ -228,27 +253,36 @@ func createHTTPClient() *http.Client {
 // Generate unique suffix (optimized with pre-allocated buffer)
 var suffixChars = []byte("abcdefghijklmnopqrstuvwxyz0123456789")
 
+// Pool of random number generators to avoid global lock contention
+var randPool = sync.Pool{
+	New: func() interface{} {
+		return rand.New(rand.NewSource(time.Now().UnixNano()))
+	},
+}
+
 func generateUniqueSuffix() string {
+	// Get per-goroutine random source from pool (avoids global lock)
+	rng := randPool.Get().(*rand.Rand)
+	defer randPool.Put(rng)
+
 	suffix := make([]byte, 16)
 	for i := range suffix {
-		suffix[i] = suffixChars[rand.Intn(len(suffixChars))]
+		suffix[i] = suffixChars[rng.Intn(len(suffixChars))]
 	}
-	return fmt.Sprintf("%d_%s", time.Now().Unix(), suffix)
+	// Avoid fmt.Sprintf - use string concatenation with strconv
+	timestamp := time.Now().Unix()
+	return strconv.FormatInt(timestamp, 10) + "_" + string(suffix)
 }
 
 // CSVDataSource implements DataSource interface for local CSV files
 type CSVDataSource struct {
-	DataFile  string
-	TokenFile string
+	DataDirectory string
 }
 
-// Connect validates CSV files exist
+// Connect validates CSV data directory exists
 func (c *CSVDataSource) Connect() error {
-	if _, err := os.Stat(c.DataFile); os.IsNotExist(err) {
-		return fmt.Errorf("data file not found: %s", c.DataFile)
-	}
-	if _, err := os.Stat(c.TokenFile); os.IsNotExist(err) {
-		return fmt.Errorf("token file not found: %s", c.TokenFile)
+	if _, err := os.Stat(c.DataDirectory); os.IsNotExist(err) {
+		return fmt.Errorf("data directory not found: %s", c.DataDirectory)
 	}
 	return nil
 }
@@ -260,17 +294,21 @@ func (c *CSVDataSource) Close() error {
 
 // ReadRecords reads records from CSV files
 func (c *CSVDataSource) ReadRecords(vaultConfig VaultConfig, maxRecords int) ([]Record, error) {
+	// Construct file paths based on vault type
+	dataFilePath := fmt.Sprintf("%s/%s_data.csv", c.DataDirectory, vaultConfig.Column)
+	tokenFilePath := fmt.Sprintf("%s/%s_tokens.csv", c.DataDirectory, vaultConfig.Column)
+
 	// Open data file
-	dataFile, err := os.Open(c.DataFile)
+	dataFile, err := os.Open(dataFilePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open data file: %w", err)
+		return nil, fmt.Errorf("failed to open data file %s: %w", dataFilePath, err)
 	}
 	defer dataFile.Close()
 
 	// Open token file
-	tokenFile, err := os.Open(c.TokenFile)
+	tokenFile, err := os.Open(tokenFilePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open token file: %w", err)
+		return nil, fmt.Errorf("failed to open token file %s: %w", tokenFilePath, err)
 	}
 	defer tokenFile.Close()
 
@@ -450,7 +488,7 @@ func (s *SnowflakeDataSource) buildUnionQuery(vaultConfig VaultConfig) string {
 	switch vaultConfig.Column {
 	case "name":
 		// First name, Last name, Middle initial from both CLM and MBR tables
-		query = `SELECT NAME, SKFL_MBR_NAME_DETOK(NAME) AS name_token
+		query = `SELECT NAME, T01_PROTEGRITY.SCRTY_ACS_CNTRL.SKFL_MBR_NAME_DETOK(NAME) AS name_token
 FROM (
 	SELECT SRC_MBR_FRST_NM AS NAME FROM D01_SKYFLOW_POC.SKYFLOW_POC.CLM GROUP BY 1
 	UNION
@@ -467,7 +505,7 @@ FROM (
 GROUP BY 1, 2`
 	case "id":
 		// Multiple ID types from both CLM and MBR tables
-		query = `SELECT ID, SKFL_MBR_IDENTIFIERS_DETOK(ID) AS id_token
+		query = `SELECT ID, T01_PROTEGRITY.SCRTY_ACS_CNTRL.SKFL_MBR_IDENTIFIERS_DETOK(ID) AS id_token
 FROM (
 	SELECT SRC_ENRLMNT_ID AS ID FROM D01_SKYFLOW_POC.SKYFLOW_POC.CLM GROUP BY 1
 	UNION
@@ -484,7 +522,7 @@ FROM (
 GROUP BY 1, 2`
 	case "dob":
 		// Birth date from both CLM and MBR tables
-		query = `SELECT BRTH_DT, SKFL_BIRTHDATE_DETOK(BRTH_DT) AS dob_token
+		query = `SELECT BRTH_DT, T01_PROTEGRITY.SCRTY_ACS_CNTRL.SKFL_BIRTHDATE_DETOK(BRTH_DT) AS dob_token
 FROM (
 	SELECT SRC_MBR_BRTH_DT AS BRTH_DT FROM D01_SKYFLOW_POC.SKYFLOW_POC.CLM
 	UNION
@@ -493,7 +531,7 @@ FROM (
 GROUP BY 1, 2`
 	case "ssn":
 		// SSN from both CLM and MBR tables
-		query = `SELECT SSN, SKFL_SSN_DETOK(SSN) AS ssn_token
+		query = `SELECT SSN, T01_PROTEGRITY.SCRTY_ACS_CNTRL.SKFL_SSN_DETOK(SSN) AS ssn_token
 FROM (
 	SELECT SRC_MBR_SSN AS SSN FROM D01_SKYFLOW_POC.SKYFLOW_POC.CLM GROUP BY 1
 	UNION
@@ -596,6 +634,9 @@ func createBYOTPayload(records []Record, vaultConfig VaultConfig, config *Config
 
 	recordsJSON := make([]map[string]interface{}, 0, len(records))
 
+	// Pre-allocate string builders for suffix concatenation (if enabled)
+	var valueBuilder, tokenBuilder strings.Builder
+
 	for _, record := range records {
 		value := record.Value
 		token := record.Token
@@ -604,8 +645,22 @@ func createBYOTPayload(records []Record, vaultConfig VaultConfig, config *Config
 			suffixStart := time.Now()
 			dataSuffix := generateUniqueSuffix()
 			tokenSuffix := generateUniqueSuffix()
-			value = value + "_" + dataSuffix
-			token = token + "_" + tokenSuffix
+
+			// Use strings.Builder to avoid multiple string allocations
+			valueBuilder.Reset()
+			valueBuilder.Grow(len(record.Value) + 1 + len(dataSuffix))
+			valueBuilder.WriteString(record.Value)
+			valueBuilder.WriteByte('_')
+			valueBuilder.WriteString(dataSuffix)
+			value = valueBuilder.String()
+
+			tokenBuilder.Reset()
+			tokenBuilder.Grow(len(record.Token) + 1 + len(tokenSuffix))
+			tokenBuilder.WriteString(record.Token)
+			tokenBuilder.WriteByte('_')
+			tokenBuilder.WriteString(tokenSuffix)
+			token = tokenBuilder.String()
+
 			metrics.AddTime("suffix_gen", time.Since(suffixStart))
 		}
 
@@ -652,7 +707,7 @@ func createBYOTPayload(records []Record, vaultConfig VaultConfig, config *Config
 }
 
 // Send batch to Skyflow (optimized with shared HTTP client)
-func sendBatch(client *http.Client, config *Config, vaultConfig VaultConfig, batch []Record, batchNum int, metrics *Metrics) error {
+func sendBatch(client *http.Client, config *Config, vaultConfig VaultConfig, apiURL string, batch []Record, batchNum int, metrics *Metrics) error {
 	// Base delay
 	if config.BaseRequestDelay > 0 {
 		delayStart := time.Now()
@@ -666,12 +721,11 @@ func sendBatch(client *http.Client, config *Config, vaultConfig VaultConfig, bat
 		return fmt.Errorf("failed to create payload: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/v1/vaults/%s/%s", config.VaultURL, vaultConfig.ID, vaultConfig.Column)
-
 	// Retry logic with exponential backoff
 	maxRetries := 5
+	hadRetry := false
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		req, err := http.NewRequest("POST", url, bytes.NewReader(payload))
+		req, err := http.NewRequest("POST", apiURL, bytes.NewReader(payload))
 		if err != nil {
 			return fmt.Errorf("failed to create request: %w", err)
 		}
@@ -680,13 +734,46 @@ func sendBatch(client *http.Client, config *Config, vaultConfig VaultConfig, bat
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept-Encoding", "gzip")
 
+		// Track active requests
+		atomic.AddInt64(&metrics.ActiveRequests, 1)
+		atomic.AddInt64(&metrics.TotalRequests, 1)
+
 		apiStart := time.Now()
 		resp, err := client.Do(req)
 		apiDuration := time.Since(apiStart)
+
+		atomic.AddInt64(&metrics.ActiveRequests, -1)
 		metrics.AddTime("api_call", apiDuration)
+
+		// Track API latency for live metrics
+		latencyNanos := apiDuration.Nanoseconds()
+		atomic.AddInt64(&metrics.TotalAPILatency, latencyNanos)
+
+		// Update min latency (atomic compare-and-swap loop)
+		for {
+			oldMin := atomic.LoadInt64(&metrics.MinAPILatency)
+			if oldMin != 0 && oldMin <= latencyNanos {
+				break // Current min is smaller, no update needed
+			}
+			if atomic.CompareAndSwapInt64(&metrics.MinAPILatency, oldMin, latencyNanos) {
+				break
+			}
+		}
+
+		// Update max latency (atomic compare-and-swap loop)
+		for {
+			oldMax := atomic.LoadInt64(&metrics.MaxAPILatency)
+			if oldMax >= latencyNanos {
+				break // Current max is larger, no update needed
+			}
+			if atomic.CompareAndSwapInt64(&metrics.MaxAPILatency, oldMax, latencyNanos) {
+				break
+			}
+		}
 
 		if err != nil {
 			if attempt < maxRetries-1 {
+				hadRetry = true
 				retryStart := time.Now()
 				backoff := time.Duration(1<<uint(attempt)) * time.Second
 				time.Sleep(backoff)
@@ -697,13 +784,32 @@ func sendBatch(client *http.Client, config *Config, vaultConfig VaultConfig, bat
 			return fmt.Errorf("API request failed after retries: %w", err)
 		}
 
-		// Read and close body immediately to reuse connection
-		io.Copy(io.Discard, resp.Body)
+		// Read body for error diagnostics
+		bodyBytes, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
 		if resp.StatusCode == 200 || resp.StatusCode == 201 {
+			// Track whether this was immediate success or after retry
+			if hadRetry {
+				atomic.AddInt64(&metrics.RetriedSuccesses, 1)
+			} else {
+				atomic.AddInt64(&metrics.ImmediateSuccesses, 1)
+			}
 			metrics.AddSuccessfulBatch()
 			return nil
+		}
+
+		// Log non-success responses for diagnostics
+		if resp.StatusCode == 429 {
+			atomic.AddInt64(&metrics.RateLimited429, 1)
+			hadRetry = true
+			fmt.Printf("  ⚠️  Batch %d: Rate limited (429), retrying in %d seconds (attempt %d/%d)\n",
+				batchNum, 2<<uint(attempt), attempt+1, maxRetries)
+		} else if resp.StatusCode >= 500 {
+			atomic.AddInt64(&metrics.ServerErrors5xx, 1)
+			hadRetry = true
+			fmt.Printf("  ⚠️  Batch %d: Server error (%d), retrying in %d seconds (attempt %d/%d)\n",
+				batchNum, resp.StatusCode, 2<<uint(attempt), attempt+1, maxRetries)
 		}
 
 		// Handle retryable errors
@@ -717,16 +823,52 @@ func sendBatch(client *http.Client, config *Config, vaultConfig VaultConfig, bat
 			}
 			// Max retries reached for retryable error
 			metrics.AddFailedBatch()
-			return fmt.Errorf("API request failed with status %d after %d retries", resp.StatusCode, maxRetries)
+			err := fmt.Errorf("API request failed with status %d after %d retries (body: %s)",
+				resp.StatusCode, maxRetries, string(bodyBytes))
+			// Log batch error for later review
+			metrics.BatchErrorsMutex.Lock()
+			metrics.BatchErrors = append(metrics.BatchErrors, BatchError{
+				BatchNumber: batchNum,
+				Records:     batch,
+				Error:       err.Error(),
+				StatusCode:  resp.StatusCode,
+				Timestamp:   time.Now(),
+			})
+			metrics.BatchErrorsMutex.Unlock()
+			return err
 		}
 
 		// Non-retryable error (4xx other than 429)
 		metrics.AddFailedBatch()
-		return fmt.Errorf("API request failed with non-retryable status %d", resp.StatusCode)
+		fmt.Printf("  ❌ Batch %d: Non-retryable error %d (body: %s)\n",
+			batchNum, resp.StatusCode, string(bodyBytes))
+		err = fmt.Errorf("API request failed with non-retryable status %d", resp.StatusCode)
+		// Log batch error for later review
+		metrics.BatchErrorsMutex.Lock()
+		metrics.BatchErrors = append(metrics.BatchErrors, BatchError{
+			BatchNumber: batchNum,
+			Records:     batch,
+			Error:       err.Error(),
+			StatusCode:  resp.StatusCode,
+			Timestamp:   time.Now(),
+		})
+		metrics.BatchErrorsMutex.Unlock()
+		return err
 	}
 
 	metrics.AddFailedBatch()
-	return fmt.Errorf("max retries exceeded due to network errors")
+	networkErr := fmt.Errorf("max retries exceeded due to network errors")
+	// Log batch error for later review
+	metrics.BatchErrorsMutex.Lock()
+	metrics.BatchErrors = append(metrics.BatchErrors, BatchError{
+		BatchNumber: batchNum,
+		Records:     batch,
+		Error:       networkErr.Error(),
+		StatusCode:  0,
+		Timestamp:   time.Now(),
+	})
+	metrics.BatchErrorsMutex.Unlock()
+	return networkErr
 }
 
 // Process a single vault
@@ -759,6 +901,18 @@ func processVault(config *Config, vaultConfig VaultConfig, dataSource DataSource
 	}
 	fmt.Printf("📊 Loaded %d records from %s\n", len(records), sourceType)
 
+	// Calculate dynamic progress interval (report every 1%, but keep reasonable bounds)
+	// Minimum: 10,000 records, Maximum: 1,000,000 records
+	progressInterval := len(records) / 100 // 1% of total
+	if progressInterval < 10000 {
+		progressInterval = 10000
+	}
+	if progressInterval > 1000000 {
+		progressInterval = 1000000
+	}
+	config.ProgressInterval = progressInterval // Update config with calculated interval
+	fmt.Printf("📈 Progress updates every %d records (~%.1f%%)\n", progressInterval, float64(progressInterval)/float64(len(records))*100)
+
 	// Split into batches
 	var batches [][]Record
 	for i := 0; i < len(records); i += config.BatchSize {
@@ -771,8 +925,11 @@ func processVault(config *Config, vaultConfig VaultConfig, dataSource DataSource
 
 	fmt.Printf("🔥 Processing %d batches with %d concurrent workers\n", len(batches), config.MaxConcurrency)
 
-	// Create shared HTTP client (connection pooling)
-	client := createHTTPClient()
+	// Create shared HTTP client (connection pooling scaled to worker count)
+	client := createHTTPClient(config.MaxConcurrency)
+
+	// Pre-construct API URL (avoid repeated string formatting in hot path)
+	apiURL := fmt.Sprintf("%s/v1/vaults/%s/%s", config.VaultURL, vaultConfig.ID, vaultConfig.Column)
 
 	// Process batches concurrently with worker pool
 	var wg sync.WaitGroup
@@ -787,31 +944,109 @@ func processVault(config *Config, vaultConfig VaultConfig, dataSource DataSource
 		go func() {
 			defer wg.Done()
 			for job := range batchChan {
-				err := sendBatch(client, config, vaultConfig, job.batch, job.num, metrics)
+				// Track active worker
+				atomic.AddInt64(&metrics.ActiveWorkers, 1)
+
+				err := sendBatch(client, config, vaultConfig, apiURL, job.batch, job.num, metrics)
+
+				atomic.AddInt64(&metrics.ActiveWorkers, -1)
+
 				if err != nil {
 					// Log error with batch details
 					recordStart := job.num * len(job.batch)
 					recordEnd := recordStart + len(job.batch)
 					fmt.Printf("  ❌ Batch %d FAILED (records %d-%d): %v\n",
 						job.num, recordStart, recordEnd, err)
+				} else {
+					// Only count records on successful batch
+					for range job.batch {
+						metrics.AddRecord()
+					}
 				}
 
-				for range job.batch {
-					metrics.AddRecord()
-				}
-
-				// Progress reporting
+				// Progress reporting with HTTP status breakdown
 				totalRecords := atomic.LoadInt64(&metrics.TotalRecords)
-				if totalRecords%int64(config.ProgressInterval) == 0 {
+				successBatches := atomic.LoadInt64(&metrics.SuccessfulBatches)
+				failedBatches := atomic.LoadInt64(&metrics.FailedBatches)
+				rateLimited := atomic.LoadInt64(&metrics.RateLimited429)
+				immediate := atomic.LoadInt64(&metrics.ImmediateSuccesses)
+				retried := atomic.LoadInt64(&metrics.RetriedSuccesses)
+
+				// Report every N successful records
+				if totalRecords > 0 && totalRecords%int64(config.ProgressInterval) == 0 {
 					elapsed := time.Since(metrics.StartTime).Seconds()
 					rate := float64(totalRecords) / elapsed
-					fmt.Printf("  Progress: %d/%d records (%.1f%%) - %.0f records/sec\n",
+					totalBatches := successBatches + failedBatches
+					successRate := float64(successBatches) / float64(totalBatches) * 100
+
+					fmt.Printf("  Progress: %d/%d records (%.1f%%) - %.0f records/sec | Batches: %d✅ (%d immediate, %d retried) %d❌ (%.0f%% success) | 429s: %d\n",
 						totalRecords, len(records),
-						float64(totalRecords)/float64(len(records))*100, rate)
+						float64(totalRecords)/float64(len(records))*100, rate,
+						successBatches, immediate, retried, failedBatches, successRate, rateLimited)
 				}
 			}
 		}()
 	}
+
+	// Start real-time metrics reporter
+	stopMetrics := make(chan struct{})
+	var metricsWg sync.WaitGroup
+	metricsWg.Add(1)
+	go func() {
+		defer metricsWg.Done()
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+
+		lastRequests := int64(0)
+		lastTime := time.Now()
+
+		for {
+			select {
+			case <-stopMetrics:
+				return
+			case <-ticker.C:
+				now := time.Now()
+				currentRequests := atomic.LoadInt64(&metrics.TotalRequests)
+				deltaRequests := currentRequests - lastRequests
+				deltaTime := now.Sub(lastTime).Seconds()
+				requestRate := float64(deltaRequests) / deltaTime
+
+				activeWorkers := atomic.LoadInt64(&metrics.ActiveWorkers)
+				activeRequests := atomic.LoadInt64(&metrics.ActiveRequests)
+				rateLimited := atomic.LoadInt64(&metrics.RateLimited429)
+				totalRecords := atomic.LoadInt64(&metrics.TotalRecords)
+
+				elapsed := now.Sub(metrics.StartTime).Seconds()
+				recordRate := float64(totalRecords) / elapsed
+
+				// Calculate average API latency
+				totalLatencyNanos := atomic.LoadInt64(&metrics.TotalAPILatency)
+				avgLatencyMs := 0.0
+				if currentRequests > 0 {
+					avgLatencyMs = float64(totalLatencyNanos) / float64(currentRequests) / 1_000_000
+				}
+
+				// Get min/max latency
+				minLatencyNanos := atomic.LoadInt64(&metrics.MinAPILatency)
+				maxLatencyNanos := atomic.LoadInt64(&metrics.MaxAPILatency)
+				minLatencyMs := float64(minLatencyNanos) / 1_000_000
+				maxLatencyMs := float64(maxLatencyNanos) / 1_000_000
+
+				fmt.Printf("  [LIVE] Workers: %d/%d | HTTP: %d in-flight | Req: %.0f/s | Rec: %.0f/s | Latency: avg=%.0fms min=%.0fms max=%.0fms | 429s: %d\n",
+					activeWorkers, config.MaxConcurrency,
+					activeRequests,
+					requestRate,
+					recordRate,
+					avgLatencyMs,
+					minLatencyMs,
+					maxLatencyMs,
+					rateLimited)
+
+				lastRequests = currentRequests
+				lastTime = now
+			}
+		}
+	}()
 
 	// Feed batches to workers
 	for batchNum, batch := range batches {
@@ -823,14 +1058,84 @@ func processVault(config *Config, vaultConfig VaultConfig, dataSource DataSource
 	close(batchChan)
 
 	wg.Wait()
+
+	// Stop metrics reporter
+	close(stopMetrics)
+	metricsWg.Wait()
+
 	metrics.EndTime = time.Now()
 
-	fmt.Printf("✅ %s processing complete: %d records, %d successful batches, %d failed batches\n",
-		vaultConfig.Name, atomic.LoadInt64(&metrics.TotalRecords),
-		atomic.LoadInt64(&metrics.SuccessfulBatches),
-		atomic.LoadInt64(&metrics.FailedBatches))
+	totalRecords := atomic.LoadInt64(&metrics.TotalRecords)
+	successBatches := atomic.LoadInt64(&metrics.SuccessfulBatches)
+	failedBatches := atomic.LoadInt64(&metrics.FailedBatches)
+	totalBatches := successBatches + failedBatches
+
+	fmt.Printf("✅ %s processing complete: %d records uploaded | %d/%d batches successful (%.1f%%)\n",
+		vaultConfig.Name, totalRecords,
+		successBatches, totalBatches,
+		float64(successBatches)/float64(totalBatches)*100)
+
+	// Write error log if there were failures
+	if len(metrics.BatchErrors) > 0 {
+		if err := writeErrorLog(vaultConfig, metrics); err != nil {
+			fmt.Printf("  ⚠️  Failed to write error log: %v\n", err)
+		}
+	}
 
 	return metrics
+}
+
+// writeErrorLog creates a JSON file with details of failed batches
+func writeErrorLog(vaultConfig VaultConfig, metrics *Metrics) error {
+	if len(metrics.BatchErrors) == 0 {
+		return nil
+	}
+
+	// Create filename with timestamp
+	timestamp := time.Now().Format("20060102_150405")
+	filename := fmt.Sprintf("error_log_%s_%s.json", vaultConfig.Name, timestamp)
+
+	// Create error log structure
+	errorLog := struct {
+		VaultName     string       `json:"vault_name"`
+		VaultID       string       `json:"vault_id"`
+		Column        string       `json:"column"`
+		Timestamp     time.Time    `json:"timestamp"`
+		TotalErrors   int          `json:"total_errors"`
+		FailedRecords int          `json:"failed_records"`
+		Errors        []BatchError `json:"errors"`
+	}{
+		VaultName:     vaultConfig.Name,
+		VaultID:       vaultConfig.ID,
+		Column:        vaultConfig.Column,
+		Timestamp:     time.Now(),
+		TotalErrors:   len(metrics.BatchErrors),
+		FailedRecords: 0,
+		Errors:        metrics.BatchErrors,
+	}
+
+	// Count total failed records
+	for _, batchErr := range metrics.BatchErrors {
+		errorLog.FailedRecords += len(batchErr.Records)
+	}
+
+	// Write to file
+	file, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("failed to create error log file: %w", err)
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(errorLog); err != nil {
+		return fmt.Errorf("failed to write error log: %w", err)
+	}
+
+	fmt.Printf("  📋 Error log written to: %s (%d batches, %d records)\n",
+		filename, errorLog.TotalErrors, errorLog.FailedRecords)
+
+	return nil
 }
 
 // Display performance summary
@@ -850,16 +1155,38 @@ func displaySummary(allMetrics []*Metrics, totalStart time.Time) {
 		successful := atomic.LoadInt64(&m.SuccessfulBatches)
 		failed := atomic.LoadInt64(&m.FailedBatches)
 
-		if records > 0 {
+		if records > 0 || successful > 0 || failed > 0 {
 			fmt.Printf("\n%s VAULT PERFORMANCE:\n", m.VaultName)
-			fmt.Printf("  Records Processed:     %d\n", records)
+			fmt.Printf("  Records Uploaded:      %d (successfully processed)\n", records)
 			fmt.Printf("  Processing Time:       %.2f seconds\n", m.Duration().Seconds())
-			fmt.Printf("  Throughput:            %.0f records/sec\n", m.Throughput())
+			fmt.Printf("  Throughput:            %.0f records/sec (successful only)\n", m.Throughput())
 			totalBatches := successful + failed
 			if totalBatches > 0 {
-				fmt.Printf("  Success Rate:          %d/%d batches (%.1f%%)\n",
+				fmt.Printf("  Batch Success Rate:    %d/%d batches (%.1f%%)\n",
 					successful, totalBatches,
 					float64(successful)/float64(totalBatches)*100)
+			}
+
+			// API response summary
+			rateLimited := atomic.LoadInt64(&m.RateLimited429)
+			serverErrors := atomic.LoadInt64(&m.ServerErrors5xx)
+			immediate := atomic.LoadInt64(&m.ImmediateSuccesses)
+			retried := atomic.LoadInt64(&m.RetriedSuccesses)
+
+			if rateLimited > 0 || serverErrors > 0 || retried > 0 {
+				fmt.Printf("\n  API RESPONSE SUMMARY:\n")
+				if successful > 0 {
+					immediateRate := float64(immediate) / float64(successful) * 100
+					retriedRate := float64(retried) / float64(successful) * 100
+					fmt.Printf("    ✅ Immediate Successes: %d (%.1f%% of batches)\n", immediate, immediateRate)
+					fmt.Printf("    🔄 Retried Successes:   %d (%.1f%% of batches)\n", retried, retriedRate)
+				}
+				if rateLimited > 0 {
+					fmt.Printf("    ⚠️  Rate Limited (429):  %d responses during execution\n", rateLimited)
+				}
+				if serverErrors > 0 {
+					fmt.Printf("    ⚠️  Server Errors (5xx): %d responses during execution\n", serverErrors)
+				}
 			}
 
 			// Detailed timing
@@ -937,6 +1264,30 @@ func displaySummary(allMetrics []*Metrics, totalStart time.Time) {
 	fmt.Printf("\nTHROUGHPUT RATES:\n")
 	fmt.Printf("  End-to-End Throughput:      %.0f records/sec (actual)\n",
 		float64(totalRecords)/totalElapsed.Seconds())
+
+	// Error log summary
+	hasErrors := false
+	for _, m := range allMetrics {
+		if len(m.BatchErrors) > 0 {
+			hasErrors = true
+			break
+		}
+	}
+
+	if hasErrors {
+		fmt.Printf("\n📋 ERROR LOGS CREATED:\n")
+		for _, m := range allMetrics {
+			if len(m.BatchErrors) > 0 {
+				totalFailedRecords := 0
+				for _, batchErr := range m.BatchErrors {
+					totalFailedRecords += len(batchErr.Records)
+				}
+				fmt.Printf("  • %s: error_log_%s_*.json (%d batches, %d records)\n",
+					m.VaultName, m.VaultName, len(m.BatchErrors), totalFailedRecords)
+			}
+		}
+		fmt.Printf("\n  ⚠️  Review error logs and re-run failed records if needed\n")
+	}
 
 	fmt.Printf("\n🎉 All vaults processed!\n")
 }
@@ -1104,7 +1455,7 @@ func clearAllVaults(config *Config, vaults []VaultConfig) error {
 	fmt.Printf("CLEARING VAULT DATA (TEST USE ONLY)\n")
 	fmt.Printf("%s\n", strings.Repeat("=", 80))
 
-	client := createHTTPClient()
+	client := createHTTPClient(0)
 
 	for _, v := range vaults {
 		if err := clearVaultTable(client, config, v); err != nil {
@@ -1114,131 +1465,6 @@ func clearAllVaults(config *Config, vaults []VaultConfig) error {
 	}
 
 	fmt.Printf("\n✅ All vaults cleared successfully!\n")
-	return nil
-}
-
-// Generate mock data CSV files
-func generateMockData(numRecords int, dataFile, tokenFile string) error {
-	fmt.Printf("\n%s\n", strings.Repeat("=", 80))
-	fmt.Printf("GENERATING MOCK DATA\n")
-	fmt.Printf("%s\n", strings.Repeat("=", 80))
-	fmt.Printf("Records to generate: %d\n", numRecords)
-	fmt.Printf("Data file:  %s\n", dataFile)
-	fmt.Printf("Token file: %s\n", tokenFile)
-	fmt.Printf("%s\n\n", strings.Repeat("=", 80))
-
-	// Sample names
-	firstNames := []string{
-		"JAMES", "MARY", "JOHN", "PATRICIA", "ROBERT", "JENNIFER", "MICHAEL", "LINDA",
-		"WILLIAM", "BARBARA", "DAVID", "ELIZABETH", "RICHARD", "SUSAN", "JOSEPH", "JESSICA",
-		"THOMAS", "SARAH", "CHARLES", "KAREN", "CHRISTOPHER", "NANCY", "DANIEL", "LISA",
-		"MATTHEW", "BETTY", "ANTHONY", "MARGARET", "MARK", "SANDRA", "DONALD", "ASHLEY",
-	}
-
-	lastNames := []string{
-		"SMITH", "JOHNSON", "WILLIAMS", "BROWN", "JONES", "GARCIA", "MILLER", "DAVIS",
-		"RODRIGUEZ", "MARTINEZ", "HERNANDEZ", "LOPEZ", "GONZALEZ", "WILSON", "ANDERSON", "THOMAS",
-		"TAYLOR", "MOORE", "JACKSON", "MARTIN", "LEE", "PEREZ", "THOMPSON", "WHITE",
-		"HARRIS", "SANCHEZ", "CLARK", "RAMIREZ", "LEWIS", "ROBINSON", "WALKER", "YOUNG",
-	}
-
-	// Generate timestamp for uniqueness
-	timestamp := fmt.Sprintf("%d", time.Now().Unix())
-
-	// Helper to generate random suffix
-	randomSuffix := func() string {
-		const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-		b := make([]byte, 16)
-		for i := range b {
-			b[i] = chars[rand.Intn(len(chars))]
-		}
-		return string(b)
-	}
-
-	// Create data file
-	dataF, err := os.Create(dataFile)
-	if err != nil {
-		return fmt.Errorf("failed to create data file: %w", err)
-	}
-	defer dataF.Close()
-
-	// Create token file
-	tokenF, err := os.Create(tokenFile)
-	if err != nil {
-		return fmt.Errorf("failed to create token file: %w", err)
-	}
-	defer tokenF.Close()
-
-	dataWriter := csv.NewWriter(dataF)
-	tokenWriter := csv.NewWriter(tokenF)
-
-	// Write headers
-	dataWriter.Write([]string{"full_name", "id", "dob", "ssn"})
-	tokenWriter.Write([]string{"full_name_token", "id_token", "dob_token", "ssn_token"})
-
-	// Generate records
-	for i := 0; i < numRecords; i++ {
-		uniqueSuffix := fmt.Sprintf("%s_%s", timestamp, randomSuffix())
-
-		// Generate unique name
-		firstName := firstNames[rand.Intn(len(firstNames))]
-		lastName := lastNames[rand.Intn(len(lastNames))]
-		fullName := fmt.Sprintf("%s %s %s", firstName, lastName, uniqueSuffix)
-
-		// Generate unique ID
-		baseID := rand.Intn(90000) + 10000
-		patientID := fmt.Sprintf("%d-%s", baseID, uniqueSuffix)
-
-		// Generate unique DOB
-		// Random date between 1940 and 2010
-		startYear := 1940
-		endYear := 2010
-		year := startYear + rand.Intn(endYear-startYear)
-		month := rand.Intn(12) + 1
-		day := rand.Intn(28) + 1 // Keep it simple, avoid month/day edge cases
-		dob := fmt.Sprintf("%04d-%02d-%02d-%s", year, month, day, uniqueSuffix)
-
-		// Generate unique SSN
-		area := rand.Intn(899) + 1
-		if area == 666 {
-			area = 667
-		}
-		group := rand.Intn(99) + 1
-		serial := rand.Intn(9999) + 1
-		ssn := fmt.Sprintf("%03d-%02d-%04d-%s", area, group, serial, uniqueSuffix)
-
-		// Write data record
-		dataWriter.Write([]string{fullName, patientID, dob, ssn})
-
-		// Write token record
-		nameToken := fmt.Sprintf("tok_name_%s_%s", timestamp, randomSuffix())
-		idToken := fmt.Sprintf("tok_id_%s_%s", timestamp, randomSuffix())
-		dobToken := fmt.Sprintf("tok_dob_%s_%s", timestamp, randomSuffix())
-		ssnToken := fmt.Sprintf("tok_ssn_%s_%s", timestamp, randomSuffix())
-		tokenWriter.Write([]string{nameToken, idToken, dobToken, ssnToken})
-
-		// Progress reporting
-		if (i+1)%10000 == 0 {
-			fmt.Printf("  Generated %d/%d records...\n", i+1, numRecords)
-		}
-	}
-
-	dataWriter.Flush()
-	tokenWriter.Flush()
-
-	if err := dataWriter.Error(); err != nil {
-		return fmt.Errorf("error writing data file: %w", err)
-	}
-	if err := tokenWriter.Error(); err != nil {
-		return fmt.Errorf("error writing token file: %w", err)
-	}
-
-	fmt.Printf("\n✅ Successfully generated %d records!\n", numRecords)
-	fmt.Printf("   Data file:  %s\n", dataFile)
-	fmt.Printf("   Token file: %s\n", tokenFile)
-	fmt.Printf("\nYou can now run:\n")
-	fmt.Printf("   ./skyflow-loader -token \"YOUR_TOKEN\"\n\n")
-
 	return nil
 }
 
@@ -1252,8 +1478,7 @@ func main() {
 	dataSource := flag.String("source", "", "Data source: csv or snowflake (overrides config)")
 
 	// CSV override flags
-	dataFile := flag.String("data-file", "", "Path to data CSV file (overrides config)")
-	tokenFile := flag.String("token-file", "", "Path to token CSV file (overrides config)")
+	dataDirectory := flag.String("data-dir", "", "Path to data directory containing vault CSV files (overrides config)")
 
 	// Snowflake override flags
 	sfUser := flag.String("sf-user", "", "Snowflake user (overrides config)")
@@ -1277,19 +1502,8 @@ func main() {
 	// Other flags
 	vault := flag.String("vault", "", "Process only specific vault (name, id, dob, ssn)")
 	clearVaults := flag.Bool("clear", false, "Clear all data from vaults before loading (TEST USE ONLY)")
-	generateData := flag.Int("generate", 0, "Generate mock CSV data with N records and exit (e.g., -generate 1000)")
 
 	flag.Parse()
-
-	// Handle generate mode (doesn't require bearer token)
-	if *generateData > 0 {
-		rand.Seed(time.Now().UnixNano())
-		if err := generateMockData(*generateData, *dataFile, *tokenFile); err != nil {
-			fmt.Printf("❌ Error generating mock data: %v\n", err)
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
 
 	// Load configuration file
 	fmt.Printf("📋 Loading configuration from: %s\n", *configFile)
@@ -1376,16 +1590,22 @@ func main() {
 		}
 	}
 
+	// Determine max records with Snowflake-specific default
+	finalMaxRecords := overrideInt(*maxRecords, fileConfig.Performance.MaxRecords, -1)
+	if dataSourceValue == "snowflake" && *maxRecords == -1 && fileConfig.Performance.MaxRecords == 0 {
+		// Default to 100 for Snowflake if not explicitly set
+		finalMaxRecords = 100
+	}
+
 	config := &Config{
 		VaultURL:         overrideString(*vaultURL, fileConfig.Skyflow.VaultURL),
 		BearerToken:      finalBearerToken,
 		BatchSize:        overrideInt(*batchSize, fileConfig.Performance.BatchSize, 0),
 		MaxConcurrency:   overrideInt(*maxConcurrency, fileConfig.Performance.MaxConcurrency, 0),
-		MaxRecords:       overrideInt(*maxRecords, fileConfig.Performance.MaxRecords, -1),
+		MaxRecords:       finalMaxRecords,
 		AppendSuffix:     *appendSuffix,
 		DataSource:       dataSourceValue,
-		DataFile:         overrideString(*dataFile, fileConfig.CSV.DataFile),
-		TokenFile:        overrideString(*tokenFile, fileConfig.CSV.TokenFile),
+		DataDirectory:    overrideString(*dataDirectory, fileConfig.CSV.DataDirectory),
 		ProgressInterval: 1000,
 		BaseRequestDelay: time.Duration(overrideInt(*baseDelay, fileConfig.Performance.BaseDelayMs, -1)) * time.Millisecond,
 		SnowflakeConfig: SnowflakeConfig{
@@ -1428,8 +1648,6 @@ func main() {
 		fmt.Printf("🔥 Processing %d vaults sequentially\n", len(vaults))
 	}
 
-	rand.Seed(time.Now().UnixNano())
-
 	// Initialize data source
 	var ds DataSource
 
@@ -1451,15 +1669,13 @@ func main() {
 		defer ds.Close()
 	} else {
 		fmt.Printf("📁 Using CSV data source\n")
-		fmt.Printf("   Data file: %s\n", config.DataFile)
-		fmt.Printf("   Token file: %s\n", config.TokenFile)
+		fmt.Printf("   Data directory: %s\n", config.DataDirectory)
 
 		csvSource := &CSVDataSource{
-			DataFile:  config.DataFile,
-			TokenFile: config.TokenFile,
+			DataDirectory: config.DataDirectory,
 		}
 		if err := csvSource.Connect(); err != nil {
-			fmt.Printf("❌ Failed to validate CSV files: %v\n", err)
+			fmt.Printf("❌ Failed to validate data directory: %v\n", err)
 			os.Exit(1)
 		}
 		ds = csvSource

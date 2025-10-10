@@ -38,13 +38,12 @@
     "query_mode": "simple"
   },
   "csv": {
-    "data_file": "../data/patient_data.csv",
-    "token_file": "../data/patient_tokens.csv"
+    "data_directory": "generator/data"
   },
   "performance": {
-    "batch_size": 300,
+    "batch_size": 25,
     "max_concurrency": 32,
-    "max_records": 100000,
+    "max_records": 100,
     "append_suffix": true,
     "base_delay_ms": 0
   }

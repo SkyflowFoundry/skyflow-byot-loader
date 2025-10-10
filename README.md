@@ -26,15 +26,17 @@ High-performance Go implementation of the Skyflow BYOT (Bring Your Own Token) lo
 - ✅ **Concurrent batch processing** with configurable worker pools
 - ✅ **Automatic retry logic** with exponential backoff
 - ✅ **Single-vault mode** for process-level parallelism
-- ✅ **Real-time progress reporting** during execution
+- ✅ **Real-time progress reporting** with live metrics
+- ✅ **Error logging** for failed batches with retry capability
 - ✅ **Detailed performance metrics** with timing breakdown
 
 ### Performance Benefits
-- 🚀 **High-throughput processing** with optimized concurrency
+- 🚀 **High-throughput processing** with optimized concurrency (9,800+ rec/s)
 - 🔥 **True parallel execution** with Go goroutines
 - ⚡ **HTTP/2 support** with connection pooling
-- 💾 **Memory-efficient** streaming for large datasets
+- 💾 **Memory-efficient** streaming with buffer pools
 - 📊 **Handles millions of records** with ease
+- ⚡ **Performance optimizations**: String builders, per-goroutine RNG, cached URLs
 
 ---
 
@@ -115,8 +117,7 @@ By default, the loader looks for `config.json` in the current directory. You can
     "query_mode": "simple"
   },
   "csv": {
-    "data_file": "../data/patient_data.csv",
-    "token_file": "../data/patient_tokens.csv"
+    "data_directory": "data"
   },
   "performance": {
     "batch_size": 300,
@@ -154,8 +155,7 @@ By default, the loader looks for `config.json` in the current directory. You can
 - `query_mode` - `simple` or `union` (see [Data Sources](#data-sources))
 
 #### CSV
-- `data_file` - Path to CSV file with data values
-- `token_file` - Path to CSV file with tokens
+- `data_directory` - Path to directory containing vault-specific CSV files (e.g., `name_data.csv`, `name_tokens.csv`, etc.)
 
 #### Performance
 - `batch_size` - Records per API call (default: 300)
@@ -347,31 +347,60 @@ Use RSA key pairs for the most secure authentication method.
 ### CSV Files (Local)
 
 **Structure Required:**
-- `patient_data.csv` - Contains: `full_name`, `id`, `dob`, `ssn`
-- `patient_tokens.csv` - Contains: `full_name_token`, `id_token`, `dob_token`, `ssn_token`
+The loader expects vault-specific CSV files in a data directory:
+
+**Data Files:**
+- `name_data.csv` - Column: `full_name`
+- `id_data.csv` - Column: `id`
+- `dob_data.csv` - Column: `dob`
+- `ssn_data.csv` - Column: `ssn`
+
+**Token Files:**
+- `name_tokens.csv` - Column: `full_name_token`
+- `id_tokens.csv` - Column: `id_token`
+- `dob_tokens.csv` - Column: `dob_token`
+- `ssn_tokens.csv` - Column: `ssn_token`
 
 **Example:**
 ```bash
 ./skyflow-loader \
   -token "YOUR_TOKEN" \
   -source csv \
-  -data-file "/path/to/data.csv" \
-  -token-file "/path/to/tokens.csv" \
+  -data-dir "./data" \
   -max-records 10000
 ```
 
+**Generate Test Data:**
+Use the included mock data generator:
+```bash
+cd generator
+./generate_mock_data 10000  # Creates 10k records per vault
+cd ..
+./skyflow-loader -source csv
+```
+
 ### Snowflake Database
+
+**Note:** Snowflake source defaults to **100 records** unless `-max-records` is specified. This prevents accidentally pulling millions of rows during testing.
 
 #### Simple Mode (Default)
 Queries a single table: `ELEVANCE.PUBLIC.PATIENTS`
 
 ```bash
+# Test with default 100 records
 ./skyflow-loader \
   -token "YOUR_TOKEN" \
   -source snowflake \
   -sf-query-mode simple \
   -sf-database "SKYFLOW_DEMO" \
   -sf-schema "PUBLIC"
+
+# Pull all records
+./skyflow-loader \
+  -token "YOUR_TOKEN" \
+  -source snowflake \
+  -sf-query-mode simple \
+  -max-records 0
 ```
 
 **Queries executed:**
@@ -506,8 +535,7 @@ wait
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-data-file` | `../data/patient_data.csv` | Path to data CSV file |
-| `-token-file` | `../data/patient_tokens.csv` | Path to token CSV file |
+| `-data-dir` | `data` | Path to directory containing vault-specific CSV files |
 
 ### Snowflake Source Flags
 
@@ -530,7 +558,7 @@ wait
 |------|---------|-------------|
 | `-batch-size` | `300` | Records per API batch |
 | `-concurrency` | `32` | Concurrent workers per vault |
-| `-max-records` | `100000` | Max records per vault (0=unlimited) |
+| `-max-records` | `100000` (CSV) / `100` (Snowflake) | Max records per vault (0=unlimited) |
 | `-append-suffix` | `true` | Append unique suffix to data/tokens |
 | `-base-delay-ms` | `0` | Delay between requests (milliseconds) |
 
@@ -659,40 +687,153 @@ SSN ──┘
 ```
 Each vault has its own process and connection.
 
-### Performance Metrics
+### Real-Time Metrics
 
-The loader tracks and reports:
-- **Data Source Read Time** - Time fetching from CSV/Snowflake
-- **Record Creation** - Object instantiation
-- **Suffix Generation** - Unique ID generation (if enabled)
-- **Payload Creation** - JSON payload building
-- **JSON Serialization** - Marshaling to bytes
-- **Skyflow API Calls** - Actual API request time
-- **Retry Delays** - Time spent in backoff
+The loader provides live monitoring during execution:
 
-**Example Output:**
+**Live Metrics (updates every 3 seconds):**
+```
+[LIVE] Workers: 32/32 | HTTP: 28 in-flight | Req: 15/s | Rec: 1450/s | Latency: avg=1280ms min=108ms max=3800ms | 429s: 0
+```
+- **Workers**: Active workers / Total workers
+- **HTTP**: In-flight HTTP requests
+- **Req/s**: API requests per second
+- **Rec/s**: Records processed per second
+- **Latency**: Average, minimum, and maximum API response times
+- **429s**: Rate limit responses encountered
+
+**Progress Updates (every 1% or 10k records):**
+```
+Progress: 50000/100000 records (50.0%) - 1298 records/sec | Batches: 500✅ (498 immediate, 2 retried) 0❌ (100% success) | 429s: 0
+```
+
+**Final Performance Summary:**
 ```
 NAME VAULT PERFORMANCE:
-  Records Processed:     100,000
-  Processing Time:       45.2 seconds
-  Throughput:            2,212 records/sec
-  Success Rate:          334/334 batches (100.0%)
+  Records Uploaded:      100,000 (successfully processed)
+  Processing Time:       77.1 seconds
+  Throughput:            1,298 records/sec (successful only)
+  Batch Success Rate:    1000/1000 batches (100.0%)
 
-  DETAILED TIMING BREAKDOWN:
+  API RESPONSE SUMMARY:
+    ✅ Immediate Successes: 998 (99.8% of batches)
+    🔄 Retried Successes:   2 (0.2% of batches)
+
+  DETAILED TIMING BREAKDOWN (Cumulative across all parallel workers):
     Component                   Cumulative % of Total  Est. Wall Clock
     ------------------------- ------------ ---------- ----------------
-    Data Source Read                5.2s      35.1%           3.8s
-    Record Creation                 0.1s       0.7%           0.1s
-    Suffix Generation               0.3s       2.0%           0.2s
-    Payload Creation                0.4s       2.7%           0.3s
-    JSON Serialization              0.2s       1.3%           0.1s
+    Data Source Read                0.0s       0.0%           0.0s
+    Record Creation                 0.0s       0.0%           0.0s
+    Suffix Generation               0.0s       0.0%           0.0s
+    Payload Creation                0.1s       0.0%           0.0s
+    JSON Serialization              0.0s       0.0%           0.0s
     BASE_REQUEST_DELAY              0.0s       0.0%           0.0s
-    Skyflow API Calls               8.6s      58.1%           6.3s
+    Skyflow API Calls             212.1s      99.9%           7.7s
     Retry Delays                    0.0s       0.0%           0.0s
     ------------------------- ------------ ---------- ----------------
-    TOTAL (Cumulative)             14.8s     100.0%           10.8s (actual)
+    TOTAL (Cumulative)            212.3s     100.0%           7.7s (actual)
 
-    Average Concurrency: 1.4x (concurrent workers executing simultaneously)
+    Average Concurrency: 27.5x (concurrent workers executing simultaneously)
+```
+
+### Error Logging
+
+When batches fail permanently (after all retries), the loader automatically creates detailed error logs:
+
+**Error Log File:** `error_log_<vault>_<timestamp>.json`
+
+**Example: `error_log_ID_20251009_153045.json`**
+```json
+{
+  "vault_name": "ID",
+  "vault_id": "abc123",
+  "column": "id",
+  "timestamp": "2025-10-09T15:30:45Z",
+  "total_errors": 3,
+  "failed_records": 300,
+  "errors": [
+    {
+      "batch_number": 42,
+      "records": [
+        {"Value": "123", "Token": "tok_456"},
+        ...
+      ],
+      "error": "API request failed with status 500 after 5 retries",
+      "status_code": 500,
+      "timestamp": "2025-10-09T15:30:12Z"
+    }
+  ]
+}
+```
+
+**Key Features:**
+- ✅ Only logs permanent failures (successful retries are NOT logged)
+- ✅ Contains complete record data (values + tokens) for re-processing
+- ✅ Includes error details and HTTP status codes
+- ✅ Automatic summary at end of run
+- ✅ One file per vault with failures
+
+**Re-running Failed Records:**
+Error logs contain all data needed to identify and re-run failed batches separately.
+
+---
+
+## Performance Testing & Monitoring Utilities
+
+### Benchmark Scripts
+
+**Quick Benchmark (5 configs, ~5-10 minutes):**
+```bash
+./benchmark_quick.sh
+```
+Tests: 32/100, 32/300, 50/100, 100/300, 200/50
+
+**Full Benchmark (13 configs, ~20-30 minutes):**
+```bash
+./benchmark_configs.sh
+```
+Comprehensive testing across multiple concurrency and batch size combinations.
+
+**Output:** `benchmark_results_<timestamp>.csv`
+
+### Scaling Analysis
+
+Analyze benchmark results to find optimal configuration for large-scale loads:
+
+```bash
+python3 analyze_scaling.py benchmark_results_20251009_185739.csv
+```
+
+**Provides:**
+- Projected times for 500M records
+- Efficiency scores for each configuration
+- Risk assessment for long-running jobs
+- Top 3 recommended configurations
+
+### Live Monitoring Dashboard
+
+Monitor loader performance in real-time (run in separate SSH window):
+
+```bash
+./monitor_live.sh
+```
+
+**Displays:**
+- EC2 system resources (CPU, memory, network, disk)
+- Loader process stats (PID, runtime, memory, threads)
+- Real-time analysis and warnings
+- Active TCP connections
+
+### Vault Clearing Utility
+
+Clear vault data between test runs:
+
+```bash
+# Build the utility
+go build -o clear-vaults clear_vaults.go
+
+# Clear all vaults
+./clear-vaults
 ```
 
 ---
@@ -716,7 +857,7 @@ NAME VAULT PERFORMANCE:
 - Reduce `-concurrency` to lower API load
 - Check Skyflow API rate limits
 - Verify bearer token is valid and not expired
-- Review error log file for specific API errors
+- **Review error log file** (`error_log_<vault>_<timestamp>.json`) for specific API errors and failed records
 
 #### Slow performance
 - Increase `-concurrency` (try 64 or 128)

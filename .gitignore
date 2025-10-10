@@ -1,12 +1,22 @@
 # Configuration with sensitive data
 config.json
 
-# Compiled binary
+# Compiled binaries
 skyflow-loader
+clear-vaults
+skyflow_load_tester
 
 # Data files
 *.csv
+data/
 
-# Logs
+# Logs and error files
 logs/
 *.log
+error_log_*.json
+
+# Benchmark results
+benchmark_results_*.csv
+
+# macOS
+.DS_Store
