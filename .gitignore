@@ -5,6 +5,7 @@ config.json
 skyflow-loader
 clear-vaults
 skyflow_load_tester
+ec2_info
 
 # Data files
 *.csv
