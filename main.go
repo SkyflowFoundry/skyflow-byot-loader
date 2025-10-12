@@ -9,10 +9,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
@@ -1468,6 +1470,65 @@ func clearAllVaults(config *Config, vaults []VaultConfig) error {
 	return nil
 }
 
+// setupOfflineMode creates a log file and redirects stdout/stderr to it
+func setupOfflineMode(logFilename string) (*os.File, error) {
+	// Create log file
+	logFile, err := os.OpenFile(logFilename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create log file: %w", err)
+	}
+
+	// Redirect stdout and stderr to log file
+	os.Stdout = logFile
+	os.Stderr = logFile
+
+	// Also set up Go's log package to use the file
+	log.SetOutput(logFile)
+
+	return logFile, nil
+}
+
+// createPIDFile writes the current process ID to a file
+func createPIDFile() error {
+	pidFile := "skyflow-loader.pid"
+	pid := os.Getpid()
+
+	file, err := os.Create(pidFile)
+	if err != nil {
+		return fmt.Errorf("failed to create PID file: %w", err)
+	}
+	defer file.Close()
+
+	_, err = fmt.Fprintf(file, "%d\n", pid)
+	if err != nil {
+		return fmt.Errorf("failed to write PID: %w", err)
+	}
+
+	return nil
+}
+
+// removePIDFile removes the PID file
+func removePIDFile() {
+	pidFile := "skyflow-loader.pid"
+	os.Remove(pidFile) // Ignore errors
+}
+
+// setupSignalHandler sets up handler to ignore SIGHUP (SSH disconnect)
+func setupSignalHandler() {
+	sigChan := make(chan os.Signal, 1)
+
+	// Ignore SIGHUP (SSH disconnect) - process continues running
+	signal.Notify(sigChan, syscall.SIGHUP)
+
+	go func() {
+		for sig := range sigChan {
+			if sig == syscall.SIGHUP {
+				fmt.Println("Received SIGHUP (SSH disconnect) - continuing in background...")
+			}
+		}
+	}()
+}
+
 func main() {
 	// Command-line flags
 	configFile := flag.String("config", "config.json", "Path to configuration file")
@@ -1502,8 +1563,67 @@ func main() {
 	// Other flags
 	vault := flag.String("vault", "", "Process only specific vault (name, id, dob, ssn)")
 	clearVaults := flag.Bool("clear", false, "Clear all data from vaults before loading (TEST USE ONLY)")
+	offlineMode := flag.Bool("offline", false, "Run in offline mode: output to log file, survive SSH disconnect")
 
 	flag.Parse()
+
+	// Setup offline mode if requested (must be done before any other output)
+	var logFile *os.File
+	var logFilename string
+	if *offlineMode {
+		// Generate log filename before redirecting
+		timestamp := time.Now().Format("20060102-150405")
+		logFilename = fmt.Sprintf("skyflow-loader-%s.log", timestamp)
+
+		// Print to console before redirecting output
+		consoleMsg := fmt.Sprintf(`
+╔════════════════════════════════════════════════════════════════╗
+║               OFFLINE MODE - BACKGROUND EXECUTION               ║
+╚════════════════════════════════════════════════════════════════╝
+
+Starting skyflow-loader in offline mode...
+• Process will survive SSH disconnection
+• Output redirected to log file: %s
+• PID file created: skyflow-loader.pid
+
+MONITORING COMMANDS:
+  tail -f %s              # Watch live output
+  cat skyflow-loader.pid              # Get process ID
+  ps -p $(cat skyflow-loader.pid)     # Check if running
+  kill $(cat skyflow-loader.pid)      # Stop process
+
+You can now safely disconnect from SSH. The process will continue running.
+
+`, logFilename, logFilename)
+		fmt.Print(consoleMsg)
+
+		// Set up log file and redirect output
+		var err error
+		logFile, err = setupOfflineMode(logFilename)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to setup offline mode: %v\n", err)
+			os.Exit(1)
+		}
+		defer logFile.Close()
+
+		// Create PID file
+		if err := createPIDFile(); err != nil {
+			fmt.Printf("⚠️  Warning: Failed to create PID file: %v\n", err)
+		} else {
+			defer removePIDFile()
+		}
+
+		// Set up signal handler to ignore SIGHUP
+		setupSignalHandler()
+
+		// All subsequent output now goes to log file
+		fmt.Printf("╔════════════════════════════════════════════════════════════════╗\n")
+		fmt.Printf("║          SKYFLOW BYOT LOADER - OFFLINE MODE STARTED            ║\n")
+		fmt.Printf("╚════════════════════════════════════════════════════════════════╝\n\n")
+		fmt.Printf("Log File: %s\n", logFilename)
+		fmt.Printf("Process ID: %d\n", os.Getpid())
+		fmt.Printf("Started: %s\n\n", time.Now().Format("2006-01-02 15:04:05"))
+	}
 
 	// Load configuration file
 	fmt.Printf("📋 Loading configuration from: %s\n", *configFile)
