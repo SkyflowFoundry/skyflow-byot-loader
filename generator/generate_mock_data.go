@@ -1,13 +1,16 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -78,6 +81,25 @@ func generateRandomSuffixWithRand(length int, rnd *rand.Rand) string {
 func generateTokenWithRand(prefix, timestamp string, length int, rnd *rand.Rand) string {
 	randomString := generateRandomSuffixWithRand(length, rnd)
 	return fmt.Sprintf("%s_%s_%s", prefix, timestamp, randomString)
+}
+
+// generateUniqueToken generates a GUARANTEED unique token using SHA256 hashing
+// recordID must be globally unique across all workers
+func generateUniqueToken(prefix, timestamp string, recordID int64) string {
+	// Create deterministic unique string
+	input := fmt.Sprintf("%s_%s_%d", prefix, timestamp, recordID)
+	hash := sha256.Sum256([]byte(input))
+	// Use first 16 bytes of hash (32 hex chars)
+	hashStr := hex.EncodeToString(hash[:16])
+	return fmt.Sprintf("%s_%s_%s", prefix, timestamp, hashStr)
+}
+
+// generateUniqueSuffix generates a GUARANTEED unique suffix using SHA256 hashing
+func generateUniqueSuffix(timestamp string, recordID int64) string {
+	input := fmt.Sprintf("suffix_%s_%d", timestamp, recordID)
+	hash := sha256.Sum256([]byte(input))
+	// Use first 8 bytes of hash (16 hex chars) for shorter suffix
+	return hex.EncodeToString(hash[:8])
 }
 
 // formatNumber formats an integer with comma separators
@@ -179,9 +201,8 @@ func generateVaultRecordsStreaming(vaultType string, numRecords int, timestamp s
 	// Create channel for generated records
 	recordChan := make(chan VaultRecord, 10000)
 
-	// Track progress
+	// Track progress (atomic for thread safety)
 	var recordsGenerated int64 = 0
-	var mu sync.Mutex
 
 	// Worker pool
 	numWorkers := 8 // Use fixed number for better control
@@ -191,7 +212,7 @@ func generateVaultRecordsStreaming(vaultType string, numRecords int, timestamp s
 	recordsPerWorker := numRecords / numWorkers
 	remainder := numRecords % numWorkers
 
-	// Start workers
+	// Start workers with guaranteed unique record ID ranges
 	for w := 0; w < numWorkers; w++ {
 		wg.Add(1)
 		workerRecords := recordsPerWorker
@@ -199,26 +220,30 @@ func generateVaultRecordsStreaming(vaultType string, numRecords int, timestamp s
 			workerRecords += remainder
 		}
 
-		go func(numRecs int) {
+		// Calculate starting record ID for this worker (guaranteed unique across workers)
+		startRecordID := int64(w) * int64(recordsPerWorker)
+
+		go func(workerID int, numRecs int, baseRecordID int64) {
 			defer wg.Done()
-			localRand := rand.New(rand.NewSource(time.Now().UnixNano() + int64(numRecs)))
+			// Keep random for data variety (names, dates), but not for uniqueness
+			localRand := rand.New(rand.NewSource(time.Now().UnixNano() + int64(workerID*1000000)))
 
 			for i := 0; i < numRecs; i++ {
-				record := generateVaultRecord(vaultType, timestamp, localRand)
+				// Calculate globally unique record ID
+				recordID := baseRecordID + int64(i)
+				record := generateVaultRecordUnique(vaultType, timestamp, recordID, localRand)
 				recordChan <- record
 
-				// Progress reporting
-				mu.Lock()
-				recordsGenerated++
-				if recordsGenerated%100000 == 0 {
+				// Progress reporting (atomic)
+				generated := atomic.AddInt64(&recordsGenerated, 1)
+				if generated%100000 == 0 {
 					fmt.Printf("  Generated %s/%s %s records...\n",
-						formatNumber(int(recordsGenerated)),
+						formatNumber(int(generated)),
 						formatNumber(numRecords),
 						vaultType)
 				}
-				mu.Unlock()
 			}
-		}(workerRecords)
+		}(w, workerRecords, startRecordID)
 	}
 
 	// Close channel when done
@@ -252,7 +277,7 @@ func generateVaultRecordsStreaming(vaultType string, numRecords int, timestamp s
 	return nil
 }
 
-// generateVaultRecord generates a single record for a specific vault type
+// generateVaultRecord generates a single record for a specific vault type (OLD - kept for compatibility)
 func generateVaultRecord(vaultType, timestamp string, rnd *rand.Rand) VaultRecord {
 	uniqueSuffix := fmt.Sprintf("%s_%s", timestamp, generateRandomSuffixWithRand(16, rnd))
 
@@ -293,6 +318,61 @@ func generateVaultRecord(vaultType, timestamp string, rnd *rand.Rand) VaultRecor
 	default:
 		data = fmt.Sprintf("unknown_%s", uniqueSuffix)
 		token = generateTokenWithRand("tok_unknown", timestamp, 16, rnd)
+	}
+
+	return VaultRecord{
+		Data:  data,
+		Token: token,
+	}
+}
+
+// generateVaultRecordUnique generates a record with GUARANTEED unique token and data
+// Uses SHA256 hashing with recordID to ensure no collisions
+func generateVaultRecordUnique(vaultType, timestamp string, recordID int64, rnd *rand.Rand) VaultRecord {
+	// Generate GUARANTEED unique suffix using SHA256 hash of recordID
+	uniqueSuffix := generateUniqueSuffix(timestamp, recordID)
+
+	var data string
+	var token string
+
+	switch vaultType {
+	case "name":
+		// Use random for variety, but uniqueness comes from suffix
+		firstName := firstNames[rnd.Intn(len(firstNames))]
+		lastName := lastNames[rnd.Intn(len(lastNames))]
+		data = fmt.Sprintf("%s %s %s", firstName, lastName, uniqueSuffix)
+		token = generateUniqueToken("tok_name", timestamp, recordID)
+
+	case "id":
+		// Use random for variety, but uniqueness comes from suffix
+		baseID := rnd.Intn(90000) + 10000
+		data = fmt.Sprintf("%d-%s", baseID, uniqueSuffix)
+		token = generateUniqueToken("tok_id", timestamp, recordID)
+
+	case "dob":
+		// Use random for variety, but uniqueness comes from suffix
+		startYear := 1940
+		endYear := 2010
+		year := startYear + rnd.Intn(endYear-startYear)
+		month := rnd.Intn(12) + 1
+		day := rnd.Intn(28) + 1
+		data = fmt.Sprintf("%04d-%02d-%02d-%s", year, month, day, uniqueSuffix)
+		token = generateUniqueToken("tok_dob", timestamp, recordID)
+
+	case "ssn":
+		// Use random for variety, but uniqueness comes from suffix
+		area := rnd.Intn(899) + 1
+		if area == 666 {
+			area = 667
+		}
+		group := rnd.Intn(99) + 1
+		serial := rnd.Intn(9999) + 1
+		data = fmt.Sprintf("%03d-%02d-%04d-%s", area, group, serial, uniqueSuffix)
+		token = generateUniqueToken("tok_ssn", timestamp, recordID)
+
+	default:
+		data = fmt.Sprintf("unknown_%s", uniqueSuffix)
+		token = generateUniqueToken("tok_unknown", timestamp, recordID)
 	}
 
 	return VaultRecord{

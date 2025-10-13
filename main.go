@@ -673,9 +673,6 @@ func createBYOTPayload(records []Record, vaultConfig VaultConfig, config *Config
 			"tokens": map[string]string{
 				vaultConfig.Column: token,
 			},
-			"upsert": map[string]string{
-				"column": vaultConfig.Column,
-			},
 		})
 	}
 
