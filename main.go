@@ -544,44 +544,44 @@ GROUP BY 1, 2`
 	return query
 }
 
-// ReadRecords reads records from Snowflake
+// ReadRecords reads records from Snowflake using cursor-based fetching
+// The query executes ONCE on Snowflake, then rows are fetched incrementally via cursor
+// The Snowflake driver automatically batches network fetches based on fetch_size
 func (s *SnowflakeDataSource) ReadRecords(vaultConfig VaultConfig, maxRecords int) ([]Record, error) {
 	if s.DB == nil {
 		return nil, fmt.Errorf("no active Snowflake connection")
 	}
 
 	// Choose query based on mode
-	var baseQuery string
+	var query string
 	if s.Config.QueryMode == "union" {
 		// D01_SKYFLOW_POC mode: Complex UNION queries with detokenization UDFs
-		baseQuery = s.buildUnionQuery(vaultConfig)
+		query = s.buildUnionQuery(vaultConfig)
 	} else {
 		// Simple mode (default): ELEVANCE.PUBLIC.PATIENTS table
-		baseQuery = s.buildSimpleQuery(vaultConfig)
+		query = s.buildSimpleQuery(vaultConfig)
 	}
 
-	// Determine if we should chunk queries
-	shouldChunk := s.Config.QueryMode == "union" && s.Config.FetchSize > 0
-
-	if shouldChunk {
-		// Chunked fetching mode - fetch data in batches to reduce memory usage
-		return s.readRecordsChunked(baseQuery, vaultConfig, maxRecords)
-	} else {
-		// Single query mode - fetch everything at once
-		return s.readRecordsSingle(baseQuery, vaultConfig, maxRecords)
-	}
-}
-
-// readRecordsSingle fetches all records in a single query
-func (s *SnowflakeDataSource) readRecordsSingle(query string, vaultConfig VaultConfig, maxRecords int) ([]Record, error) {
 	// Add LIMIT if specified
 	if maxRecords > 0 {
 		query += fmt.Sprintf(" LIMIT %d", maxRecords)
 	}
 
-	fmt.Printf("📊 Querying Snowflake for %s data (single query)...\n", vaultConfig.Name)
+	// Configure fetch size for this session if specified
+	// This controls how many rows are fetched from Snowflake to the client in each network round trip
+	if s.Config.FetchSize > 0 {
+		fmt.Printf("📊 Querying Snowflake for %s data (cursor mode: network fetch size %d)...\n",
+			vaultConfig.Name, s.Config.FetchSize)
+		// Set session parameter for fetch size
+		_, err := s.DB.Exec(fmt.Sprintf("ALTER SESSION SET ROWS_PER_RESULTSET = %d", s.Config.FetchSize))
+		if err != nil {
+			fmt.Printf("⚠️  Warning: Could not set fetch size: %v (continuing anyway)\n", err)
+		}
+	} else {
+		fmt.Printf("📊 Querying Snowflake for %s data...\n", vaultConfig.Name)
+	}
 
-	// Execute query
+	// Execute query ONCE - this creates a cursor on Snowflake
 	rows, err := s.DB.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute query: %w", err)
@@ -595,7 +595,7 @@ func (s *SnowflakeDataSource) readRecordsSingle(query string, vaultConfig VaultC
 	}
 	records := make([]Record, 0, capacity)
 
-	// Stream results
+	// Stream results via cursor - the driver fetches in batches behind the scenes
 	recordCount := 0
 	for rows.Next() {
 		var value, token string
@@ -626,86 +626,6 @@ func (s *SnowflakeDataSource) readRecordsSingle(query string, vaultConfig VaultC
 	}
 
 	fmt.Printf("✅ Retrieved %d records from Snowflake\n", len(records))
-	return records, nil
-}
-
-// readRecordsChunked fetches records in chunks using LIMIT/OFFSET
-func (s *SnowflakeDataSource) readRecordsChunked(baseQuery string, vaultConfig VaultConfig, maxRecords int) ([]Record, error) {
-	chunkSize := s.Config.FetchSize
-	fmt.Printf("📊 Querying Snowflake for %s data (chunked mode: %d records per query)...\n",
-		vaultConfig.Name, chunkSize)
-
-	// Pre-allocate slice
-	capacity := maxRecords
-	if capacity <= 0 {
-		capacity = 100000 // reasonable default
-	}
-	records := make([]Record, 0, capacity)
-
-	offset := 0
-	chunkNum := 0
-	totalFetched := 0
-
-	for {
-		chunkNum++
-
-		// Build chunked query with LIMIT/OFFSET
-		// Wrap base query in subquery to apply LIMIT/OFFSET to entire result set
-		chunkedQuery := fmt.Sprintf("SELECT * FROM (\n%s\n) AS chunked_data LIMIT %d OFFSET %d",
-			baseQuery, chunkSize, offset)
-
-		fmt.Printf("  📥 Fetching chunk %d (offset %d, limit %d)...\n", chunkNum, offset, chunkSize)
-
-		// Execute chunk query
-		rows, err := s.DB.Query(chunkedQuery)
-		if err != nil {
-			return nil, fmt.Errorf("failed to execute chunk query: %w", err)
-		}
-
-		// Read chunk results
-		chunkCount := 0
-		for rows.Next() {
-			var value, token string
-			if err := rows.Scan(&value, &token); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("failed to scan row: %w", err)
-			}
-
-			if value != "" && token != "" {
-				records = append(records, Record{
-					Value: value,
-					Token: token,
-				})
-				chunkCount++
-				totalFetched++
-			}
-
-			// Check if we've reached maxRecords limit
-			if maxRecords > 0 && totalFetched >= maxRecords {
-				rows.Close()
-				fmt.Printf("✅ Retrieved %d records from Snowflake (reached max_records limit)\n", len(records))
-				return records, nil
-			}
-		}
-
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("error iterating chunk rows: %w", err)
-		}
-		rows.Close()
-
-		fmt.Printf("  ✅ Chunk %d: Fetched %d records (total: %d)\n", chunkNum, chunkCount, totalFetched)
-
-		// If we got fewer records than chunk size, we've reached the end
-		if chunkCount < chunkSize {
-			fmt.Printf("✅ Retrieved %d records from Snowflake (all data fetched)\n", len(records))
-			break
-		}
-
-		// Move to next chunk
-		offset += chunkSize
-	}
-
 	return records, nil
 }
 
