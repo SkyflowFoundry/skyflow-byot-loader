@@ -596,6 +596,11 @@ func (s *SnowflakeDataSource) ReadRecords(vaultConfig VaultConfig, maxRecords in
 				Token: token,
 			})
 			recordCount++
+
+			// Progress update every 100K records
+			if recordCount%100000 == 0 {
+				fmt.Printf("  📥 Fetched %d records from Snowflake so far...\n", recordCount)
+			}
 		}
 
 		if maxRecords > 0 && recordCount >= maxRecords {
