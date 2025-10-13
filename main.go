@@ -92,6 +92,8 @@ type SnowflakeConfig struct {
 	Role          string
 	FetchSize     int
 	QueryMode     string // "simple" or "union"
+	StartRecord   int    // Starting record offset (0-based)
+	EndRecord     int    // Ending record (exclusive, 0 = no limit)
 }
 
 // Vault configuration
@@ -562,23 +564,46 @@ func (s *SnowflakeDataSource) ReadRecords(vaultConfig VaultConfig, maxRecords in
 		query = s.buildSimpleQuery(vaultConfig)
 	}
 
-	// Add LIMIT if specified
-	if maxRecords > 0 {
+	// Add OFFSET and LIMIT for manual chunking
+	// Priority: start-record/end-record flags > max-records flag
+	if s.Config.StartRecord > 0 || s.Config.EndRecord > 0 {
+		// Manual chunking mode
+		if s.Config.StartRecord > 0 {
+			query += fmt.Sprintf(" OFFSET %d", s.Config.StartRecord)
+		}
+		if s.Config.EndRecord > 0 {
+			limit := s.Config.EndRecord - s.Config.StartRecord
+			query += fmt.Sprintf(" LIMIT %d", limit)
+		} else if maxRecords > 0 {
+			query += fmt.Sprintf(" LIMIT %d", maxRecords)
+		}
+	} else if maxRecords > 0 {
+		// Simple max records mode
 		query += fmt.Sprintf(" LIMIT %d", maxRecords)
 	}
 
 	// Configure fetch size for this session if specified
 	// This controls how many rows are fetched from Snowflake to the client in each network round trip
 	if s.Config.FetchSize > 0 {
-		fmt.Printf("📊 Querying Snowflake for %s data (cursor mode: network fetch size %d)...\n",
-			vaultConfig.Name, s.Config.FetchSize)
+		if s.Config.StartRecord > 0 || s.Config.EndRecord > 0 {
+			fmt.Printf("📊 Querying Snowflake for %s data (records %d-%d, network fetch size %d)...\n",
+				vaultConfig.Name, s.Config.StartRecord, s.Config.EndRecord, s.Config.FetchSize)
+		} else {
+			fmt.Printf("📊 Querying Snowflake for %s data (cursor mode: network fetch size %d)...\n",
+				vaultConfig.Name, s.Config.FetchSize)
+		}
 		// Set session parameter for fetch size
 		_, err := s.DB.Exec(fmt.Sprintf("ALTER SESSION SET ROWS_PER_RESULTSET = %d", s.Config.FetchSize))
 		if err != nil {
 			fmt.Printf("⚠️  Warning: Could not set fetch size: %v (continuing anyway)\n", err)
 		}
 	} else {
-		fmt.Printf("📊 Querying Snowflake for %s data...\n", vaultConfig.Name)
+		if s.Config.StartRecord > 0 || s.Config.EndRecord > 0 {
+			fmt.Printf("📊 Querying Snowflake for %s data (records %d-%d)...\n",
+				vaultConfig.Name, s.Config.StartRecord, s.Config.EndRecord)
+		} else {
+			fmt.Printf("📊 Querying Snowflake for %s data...\n", vaultConfig.Name)
+		}
 	}
 
 	// Execute query ONCE - this creates a cursor on Snowflake
@@ -1567,6 +1592,8 @@ func main() {
 	sfRole := flag.String("sf-role", "", "Snowflake role (overrides config)")
 	sfFetchSize := flag.Int("sf-fetch-size", 0, "Snowflake fetch size (overrides config)")
 	sfQueryMode := flag.String("sf-query-mode", "", "Query mode: simple or union (overrides config)")
+	sfStartRecord := flag.Int("start-record", 0, "Starting record offset (0-based, for manual chunking)")
+	sfEndRecord := flag.Int("end-record", 0, "Ending record (exclusive, 0 = no limit, for manual chunking)")
 
 	// Performance override flags
 	batchSize := flag.Int("batch-size", 0, "Batch size for API calls (overrides config)")
@@ -1754,6 +1781,8 @@ You can now safely disconnect from SSH. The process will continue running.
 			Role:          overrideString(*sfRole, fileConfig.Snowflake.Role),
 			FetchSize:     overrideInt(*sfFetchSize, fileConfig.Snowflake.FetchSize, 0),
 			QueryMode:     overrideString(*sfQueryMode, fileConfig.Snowflake.QueryMode),
+			StartRecord:   *sfStartRecord,
+			EndRecord:     *sfEndRecord,
 		},
 	}
 
