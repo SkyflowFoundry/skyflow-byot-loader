@@ -564,18 +564,19 @@ func (s *SnowflakeDataSource) ReadRecords(vaultConfig VaultConfig, maxRecords in
 		query = s.buildSimpleQuery(vaultConfig)
 	}
 
-	// Add OFFSET and LIMIT for manual chunking
+	// Add LIMIT and OFFSET for manual chunking
 	// Priority: start-record/end-record flags > max-records flag
+	// NOTE: Snowflake syntax requires LIMIT before OFFSET
 	if s.Config.StartRecord > 0 || s.Config.EndRecord > 0 {
 		// Manual chunking mode
-		if s.Config.StartRecord > 0 {
-			query += fmt.Sprintf(" OFFSET %d", s.Config.StartRecord)
-		}
 		if s.Config.EndRecord > 0 {
 			limit := s.Config.EndRecord - s.Config.StartRecord
 			query += fmt.Sprintf(" LIMIT %d", limit)
 		} else if maxRecords > 0 {
 			query += fmt.Sprintf(" LIMIT %d", maxRecords)
+		}
+		if s.Config.StartRecord > 0 {
+			query += fmt.Sprintf(" OFFSET %d", s.Config.StartRecord)
 		}
 	} else if maxRecords > 0 {
 		// Simple max records mode
@@ -607,11 +608,15 @@ func (s *SnowflakeDataSource) ReadRecords(vaultConfig VaultConfig, maxRecords in
 	}
 
 	// Execute query ONCE - this creates a cursor on Snowflake
+	fmt.Printf("  🔍 Executing SQL query on Snowflake...\n")
+	queryStart := time.Now()
 	rows, err := s.DB.Query(query)
+	queryDuration := time.Since(queryStart)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute query: %w", err)
 	}
 	defer rows.Close()
+	fmt.Printf("  ✅ Query executed successfully (%.2f seconds)\n", queryDuration.Seconds())
 
 	// Pre-allocate slice
 	capacity := maxRecords
@@ -621,7 +626,9 @@ func (s *SnowflakeDataSource) ReadRecords(vaultConfig VaultConfig, maxRecords in
 	records := make([]Record, 0, capacity)
 
 	// Stream results via cursor - the driver fetches in batches behind the scenes
+	fmt.Printf("  📥 Starting to fetch rows from result set...\n")
 	recordCount := 0
+	lastLog := time.Now()
 	for rows.Next() {
 		var value, token string
 		if err := rows.Scan(&value, &token); err != nil {
@@ -635,9 +642,19 @@ func (s *SnowflakeDataSource) ReadRecords(vaultConfig VaultConfig, maxRecords in
 			})
 			recordCount++
 
-			// Progress update every 100K records
-			if recordCount%100000 == 0 {
+			// Progress update - more frequent for smaller datasets
+			progressInterval := 100000
+			if maxRecords > 0 && maxRecords < 100000 {
+				progressInterval = maxRecords / 10 // Log every 10%
+				if progressInterval < 100 {
+					progressInterval = 100 // At least every 100 records
+				}
+			}
+
+			// Also log every 5 seconds regardless of record count
+			if recordCount%progressInterval == 0 || time.Since(lastLog) > 5*time.Second {
 				fmt.Printf("  📥 Fetched %d records from Snowflake so far...\n", recordCount)
+				lastLog = time.Now()
 			}
 		}
 
@@ -645,6 +662,7 @@ func (s *SnowflakeDataSource) ReadRecords(vaultConfig VaultConfig, maxRecords in
 			break
 		}
 	}
+	fmt.Printf("  ✅ Finished fetching rows from Snowflake\n")
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error iterating rows: %w", err)
