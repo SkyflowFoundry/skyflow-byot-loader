@@ -28,10 +28,10 @@ import (
 
 // FileConfig represents the structure of config.json
 type FileConfig struct {
-	Skyflow     SkyflowConfig     `json:"skyflow"`
+	Skyflow     SkyflowConfig       `json:"skyflow"`
 	Snowflake   SnowflakeFileConfig `json:"snowflake"`
-	CSV         CSVConfig         `json:"csv"`
-	Performance PerformanceConfig `json:"performance"`
+	CSV         CSVConfig           `json:"csv"`
+	Performance PerformanceConfig   `json:"performance"`
 }
 
 type SkyflowConfig struct {
@@ -58,28 +58,26 @@ type CSVConfig struct {
 }
 
 type PerformanceConfig struct {
-	BatchSize      int   `json:"batch_size"`
-	MaxConcurrency int   `json:"max_concurrency"`
-	MaxRecords     int   `json:"max_records"`
-	AppendSuffix   bool  `json:"append_suffix"`
-	BaseDelayMs    int   `json:"base_delay_ms"`
-	Upsert         *bool `json:"upsert,omitempty"` // Pointer to distinguish between unset and false
+	BatchSize      int  `json:"batch_size"`
+	MaxConcurrency int  `json:"max_concurrency"`
+	MaxRecords     int  `json:"max_records"`
+	AppendSuffix   bool `json:"append_suffix"`
+	BaseDelayMs    int  `json:"base_delay_ms"`
 }
 
 // Configuration (runtime config used by the application)
 type Config struct {
-	VaultURL           string
-	BearerToken        string
-	BatchSize          int
-	MaxConcurrency     int
-	MaxRecords         int
-	AppendSuffix       bool
-	Upsert             bool
-	DataSource         string // "csv" or "snowflake"
-	DataDirectory      string
-	ProgressInterval   int
-	BaseRequestDelay   time.Duration
-	SnowflakeConfig    SnowflakeConfig
+	VaultURL         string
+	BearerToken      string
+	BatchSize        int
+	MaxConcurrency   int
+	MaxRecords       int
+	AppendSuffix     bool
+	DataSource       string // "csv" or "snowflake"
+	DataDirectory    string
+	ProgressInterval int
+	BaseRequestDelay time.Duration
+	SnowflakeConfig  SnowflakeConfig
 }
 
 // Snowflake configuration
@@ -817,17 +815,11 @@ func createBYOTPayload(records []Record, vaultConfig VaultConfig, config *Config
 		})
 	}
 
-	// Build payload - include upsert field if enabled
 	payload := map[string]interface{}{
 		"records":         recordsJSON,
 		"continueOnError": true,
 		"tokenization":    true,
 		"byot":            "ENABLE",
-	}
-
-	// Add upsert parameter if enabled (upsert on the column being inserted)
-	if config.Upsert {
-		payload["upsert"] = vaultConfig.Column
 	}
 
 	metrics.AddTime("payload_creation", time.Since(payloadStart))
@@ -868,7 +860,7 @@ func sendBatch(client *http.Client, config *Config, vaultConfig VaultConfig, api
 	}
 
 	// Retry logic with exponential backoff
-	maxRetries := 5
+	maxRetries := 3
 	hadRetry := false
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		req, err := http.NewRequest("POST", apiURL, bytes.NewReader(payload))
@@ -954,8 +946,6 @@ func sendBatch(client *http.Client, config *Config, vaultConfig VaultConfig, api
 		} else if resp.StatusCode >= 500 {
 			atomic.AddInt64(&metrics.ServerErrors5xx, 1)
 			hadRetry = true
-			fmt.Printf("  ⚠️  Batch %d: Server error (%d), retrying in %d seconds (attempt %d/%d)\n",
-				batchNum, resp.StatusCode, 2<<uint(attempt), attempt+1, maxRetries)
 		}
 
 		// Handle retryable errors
@@ -1707,7 +1697,6 @@ func main() {
 	maxRecords := flag.Int("max-records", -1, "Maximum records to process (overrides config, -1 uses config)")
 	appendSuffix := flag.Bool("append-suffix", false, "Append unique suffix to data/tokens")
 	baseDelay := flag.Int("base-delay-ms", -1, "Base delay between requests in milliseconds (overrides config, -1 uses config)")
-	upsertFlag := flag.Bool("upsert", false, "Enable upsert mode (update existing records)")
 
 	// Other flags
 	vault := flag.String("vault", "", "Process only specific vault (name, id, dob, ssn)")
@@ -1867,14 +1856,6 @@ You can now safely disconnect from SSH. The process will continue running.
 		finalMaxRecords = 100
 	}
 
-	// Determine upsert mode (CLI flag OR config file, default true if not specified)
-	finalUpsert := true // Default to true
-	if upsertFlag != nil && *upsertFlag {
-		finalUpsert = true // Explicitly enabled via CLI
-	} else if fileConfig.Performance.Upsert != nil {
-		finalUpsert = *fileConfig.Performance.Upsert // Use config file value if set
-	}
-
 	config := &Config{
 		VaultURL:         overrideString(*vaultURL, fileConfig.Skyflow.VaultURL),
 		BearerToken:      finalBearerToken,
@@ -1882,7 +1863,6 @@ You can now safely disconnect from SSH. The process will continue running.
 		MaxConcurrency:   overrideInt(*maxConcurrency, fileConfig.Performance.MaxConcurrency, 0),
 		MaxRecords:       finalMaxRecords,
 		AppendSuffix:     *appendSuffix,
-		Upsert:           finalUpsert,
 		DataSource:       dataSourceValue,
 		DataDirectory:    overrideString(*dataDirectory, fileConfig.CSV.DataDirectory),
 		ProgressInterval: 1000,
