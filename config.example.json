@@ -38,7 +38,7 @@
     "query_mode": "simple"
   },
   "csv": {
-    "data_directory": "generator/data"
+    "data_directory": "data"
   },
   "performance": {
     "batch_size": 25,

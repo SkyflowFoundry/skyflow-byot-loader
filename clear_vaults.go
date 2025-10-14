@@ -100,6 +100,11 @@ func createHTTPClient() *http.Client {
 func fetchRecords(client *http.Client, vaultURL, tableName, bearerToken string, offset int) ([]string, int, error) {
 	url := fmt.Sprintf("%s/%s?offset=%d&limit=%d", vaultURL, tableName, offset, FETCH_LIMIT)
 
+	// Debug: print URL on first fetch attempt with offset 0
+	if offset == 0 {
+		fmt.Printf("[%s] Fetching from URL: %s\n", tableName, url)
+	}
+
 	for attempt := 0; attempt < MAX_RETRIES; attempt++ {
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
@@ -117,12 +122,25 @@ func fetchRecords(client *http.Client, vaultURL, tableName, bearerToken string, 
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
+		// Debug: log response on first fetch
+		if offset == 0 {
+			fmt.Printf("[%s] Response status: %d\n", tableName, resp.StatusCode)
+			if resp.StatusCode != 200 {
+				fmt.Printf("[%s] Response body: %s\n", tableName, string(bodyBytes))
+			}
+		}
+
 		// Handle status codes
 		switch resp.StatusCode {
 		case 200:
 			var fetchResp FetchResponse
 			if err := json.Unmarshal(bodyBytes, &fetchResp); err != nil {
 				return nil, resp.StatusCode, fmt.Errorf("failed to parse response: %w", err)
+			}
+
+			// Debug: log record count
+			if offset == 0 {
+				fmt.Printf("[%s] Found %d records in response\n", tableName, len(fetchResp.Records))
 			}
 
 			skyflowIDs := make([]string, 0, len(fetchResp.Records))
@@ -138,6 +156,9 @@ func fetchRecords(client *http.Client, vaultURL, tableName, bearerToken string, 
 
 		case 404:
 			// Table is empty or not found
+			if offset == 0 {
+				fmt.Printf("[%s] Got 404 - table empty or not found\n", tableName)
+			}
 			return []string{}, 404, nil
 
 		case 429:
@@ -509,6 +530,7 @@ func main() {
 	configFile := flag.String("config", "config.json", "Path to configuration file")
 	bearerToken := flag.String("token", "", "Bearer token for authentication (overrides config)")
 	vaultURL := flag.String("vault-url", "", "Skyflow vault URL (overrides config)")
+	vault := flag.String("vault", "", "Process only specific vault (name, id, dob, ssn)")
 
 	// Performance tuning flags
 	fetchWorkers := flag.Int("fetch-workers", DEFAULT_MAX_FETCH_WORKERS, "Number of parallel fetch workers")
@@ -562,6 +584,31 @@ func main() {
 	if len(vaults) == 0 {
 		fmt.Printf("❌ Error: No vaults defined in config file\n")
 		os.Exit(1)
+	}
+
+	// Filter to specific vault if requested
+	if *vault != "" {
+		var filtered []VaultConfig
+		for _, v := range vaults {
+			if strings.EqualFold(v.Name, *vault) {
+				filtered = []VaultConfig{v}
+				break
+			}
+		}
+		if len(filtered) == 0 {
+			fmt.Printf("❌ Error: Unknown vault '%s'\n", *vault)
+			fmt.Printf("Available vaults: ")
+			for i, v := range vaults {
+				if i > 0 {
+					fmt.Printf(", ")
+				}
+				fmt.Printf("%s", v.Name)
+			}
+			fmt.Printf("\n")
+			os.Exit(1)
+		}
+		vaults = filtered
+		fmt.Printf("🎯 Single-vault mode: Clearing %s vault only\n", strings.ToUpper(*vault))
 	}
 
 	// Warning message
