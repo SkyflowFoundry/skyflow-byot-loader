@@ -373,9 +373,7 @@ The loader expects vault-specific CSV files in a data directory:
 **Generate Test Data:**
 Use the included mock data generator:
 ```bash
-cd generator
-./generate_mock_data 10000  # Creates 10k records per vault
-cd ..
+./generate_mock_data -count=10000 -output=csv  # Creates 10k records per vault
 ./skyflow-loader -source csv
 ```
 
