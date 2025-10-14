@@ -6,6 +6,7 @@ skyflow-loader
 clear-vaults
 skyflow_load_tester
 ec2_info
+generate_mock_data
 
 # Data files
 *.csv

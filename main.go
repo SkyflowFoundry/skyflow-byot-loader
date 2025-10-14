@@ -91,7 +91,9 @@ type SnowflakeConfig struct {
 	Schema        string
 	Role          string
 	FetchSize     int
-	QueryMode     string // "simple" or "union"
+	QueryMode     string // "simple", "union", or "generic"
+	CLMTable      string // CLM table name for union mode (e.g., "CLM_20251013_144708")
+	MBRTable      string // MBR table name for union mode (e.g., "MBR_20251013_144708")
 	StartRecord   int    // Starting record offset (0-based)
 	EndRecord     int    // Ending record (exclusive, 0 = no limit)
 }
@@ -486,12 +488,81 @@ func (s *SnowflakeDataSource) buildSimpleQuery(vaultConfig VaultConfig) string {
 	return query
 }
 
+// buildGenericQuery creates query with UNIONs from configurable CLM and MBR tables
+func (s *SnowflakeDataSource) buildGenericQuery(vaultConfig VaultConfig) string {
+	// Build fully qualified table names
+	clmTable := fmt.Sprintf("%s.%s.%s", s.Config.Database, s.Config.Schema, s.Config.CLMTable)
+	mbrTable := fmt.Sprintf("%s.%s.%s", s.Config.Database, s.Config.Schema, s.Config.MBRTable)
+
+	var query string
+	switch vaultConfig.Column {
+	case "name":
+		// First name, Last name, Middle initial from both CLM and MBR tables
+		// Tokens are read directly from *_TOKEN columns (no UDF detokenization)
+		query = fmt.Sprintf(`SELECT NAME, NAME_TOKEN
+FROM (
+	SELECT SRC_MBR_FRST_NM AS NAME, SRC_MBR_FRST_NM_TOKEN AS NAME_TOKEN FROM %s GROUP BY 1, 2
+	UNION
+	SELECT FRST_NM AS NAME, FRST_NM_TOKEN AS NAME_TOKEN FROM %s GROUP BY 1, 2
+	UNION
+	SELECT SRC_MBR_LAST_NM AS NAME, SRC_MBR_LAST_NM_TOKEN AS NAME_TOKEN FROM %s GROUP BY 1, 2
+	UNION
+	SELECT LAST_NM AS NAME, LAST_NM_TOKEN AS NAME_TOKEN FROM %s GROUP BY 1, 2
+	UNION
+	SELECT SRC_MBR_MID_INIT_NM AS NAME, SRC_MBR_MID_INIT_NM_TOKEN AS NAME_TOKEN FROM %s GROUP BY 1, 2
+	UNION
+	SELECT MID_INIT_NM AS NAME, MID_INIT_NM_TOKEN AS NAME_TOKEN FROM %s GROUP BY 1, 2
+) DT
+GROUP BY 1, 2`, clmTable, mbrTable, clmTable, mbrTable, clmTable, mbrTable)
+	case "id":
+		// Multiple ID types from both CLM and MBR tables
+		// Tokens are read directly from *_TOKEN columns (no UDF detokenization)
+		query = fmt.Sprintf(`SELECT ID, ID_TOKEN
+FROM (
+	SELECT SRC_ENRLMNT_ID AS ID, SRC_ENRLMNT_ID_TOKEN AS ID_TOKEN FROM %s GROUP BY 1, 2
+	UNION
+	SELECT SRC_ENRLMNT_ID AS ID, SRC_ENRLMNT_ID_TOKEN AS ID_TOKEN FROM %s GROUP BY 1, 2
+	UNION
+	SELECT SRC_HC_ID AS ID, SRC_HC_ID_TOKEN AS ID_TOKEN FROM %s GROUP BY 1, 2
+	UNION
+	SELECT HC_ID AS ID, HC_ID_TOKEN AS ID_TOKEN FROM %s GROUP BY 1, 2
+	UNION
+	SELECT SRC_SBSCRBR_ID AS ID, SRC_SBSCRBR_ID_TOKEN AS ID_TOKEN FROM %s GROUP BY 1, 2
+	UNION
+	SELECT SBSCRBR_ID AS ID, SBSCRBR_ID_TOKEN AS ID_TOKEN FROM %s GROUP BY 1, 2
+) DT
+GROUP BY 1, 2`, clmTable, mbrTable, clmTable, mbrTable, clmTable, mbrTable)
+	case "dob":
+		// Birth date from both CLM and MBR tables
+		// Tokens are read directly from *_TOKEN columns (no UDF detokenization)
+		query = fmt.Sprintf(`SELECT BRTH_DT, BRTH_DT_TOKEN
+FROM (
+	SELECT SRC_MBR_BRTH_DT AS BRTH_DT, SRC_MBR_BRTH_DT_TOKEN AS BRTH_DT_TOKEN FROM %s
+	UNION
+	SELECT BRTH_DT, BRTH_DT_TOKEN FROM %s
+) DT
+GROUP BY 1, 2`, clmTable, mbrTable)
+	case "ssn":
+		// SSN from both CLM and MBR tables
+		// Tokens are read directly from *_TOKEN columns (no UDF detokenization)
+		query = fmt.Sprintf(`SELECT SSN, SSN_TOKEN
+FROM (
+	SELECT SRC_MBR_SSN AS SSN, SRC_MBR_SSN_TOKEN AS SSN_TOKEN FROM %s GROUP BY 1, 2
+	UNION
+	SELECT SSN, SSN_TOKEN FROM %s GROUP BY 1, 2
+) DT
+GROUP BY 1, 2`, clmTable, mbrTable)
+	}
+	return query
+}
+
 // buildUnionQuery creates query for D01_SKYFLOW_POC with UNIONs and UDF detokenization
 func (s *SnowflakeDataSource) buildUnionQuery(vaultConfig VaultConfig) string {
 	var query string
 	switch vaultConfig.Column {
 	case "name":
 		// First name, Last name, Middle initial from both CLM and MBR tables
+		// Uses UDF detokenization on-the-fly
 		query = `SELECT NAME, T01_PROTEGRITY.SCRTY_ACS_CNTRL.SKFL_MBR_NAME_DETOK(NAME) AS name_token
 FROM (
 	SELECT SRC_MBR_FRST_NM AS NAME FROM D01_SKYFLOW_POC.SKYFLOW_POC.CLM GROUP BY 1
@@ -509,7 +580,8 @@ FROM (
 GROUP BY 1, 2`
 	case "id":
 		// Multiple ID types from both CLM and MBR tables
-		query = `SELECT ID, T01_PROTEGRITY.SCRTY_ACS_CNTRL.SKFL_MBR_IDENTIFIERS_DETOK(ID) AS id_token
+		// Uses UDF detokenization on-the-fly
+		query = `SELECT ID, T01_PROTEGRITY.SCRTY_ACS_CNTRL.SKFL_MBR_ID_DETOK(ID) AS id_token
 FROM (
 	SELECT SRC_ENRLMNT_ID AS ID FROM D01_SKYFLOW_POC.SKYFLOW_POC.CLM GROUP BY 1
 	UNION
@@ -526,7 +598,8 @@ FROM (
 GROUP BY 1, 2`
 	case "dob":
 		// Birth date from both CLM and MBR tables
-		query = `SELECT BRTH_DT, T01_PROTEGRITY.SCRTY_ACS_CNTRL.SKFL_BIRTHDATE_DETOK(BRTH_DT) AS dob_token
+		// Uses UDF detokenization on-the-fly
+		query = `SELECT BRTH_DT, T01_PROTEGRITY.SCRTY_ACS_CNTRL.SKFL_MBR_DOB_DETOK(BRTH_DT) AS dob_token
 FROM (
 	SELECT SRC_MBR_BRTH_DT AS BRTH_DT FROM D01_SKYFLOW_POC.SKYFLOW_POC.CLM
 	UNION
@@ -535,7 +608,8 @@ FROM (
 GROUP BY 1, 2`
 	case "ssn":
 		// SSN from both CLM and MBR tables
-		query = `SELECT SSN, T01_PROTEGRITY.SCRTY_ACS_CNTRL.SKFL_SSN_DETOK(SSN) AS ssn_token
+		// Uses UDF detokenization on-the-fly
+		query = `SELECT SSN, T01_PROTEGRITY.SCRTY_ACS_CNTRL.SKFL_MBR_SSN_DETOK(SSN) AS ssn_token
 FROM (
 	SELECT SRC_MBR_SSN AS SSN FROM D01_SKYFLOW_POC.SKYFLOW_POC.CLM GROUP BY 1
 	UNION
@@ -556,10 +630,14 @@ func (s *SnowflakeDataSource) ReadRecords(vaultConfig VaultConfig, maxRecords in
 
 	// Choose query based on mode
 	var query string
-	if s.Config.QueryMode == "union" {
-		// D01_SKYFLOW_POC mode: Complex UNION queries with detokenization UDFs
+	switch s.Config.QueryMode {
+	case "union":
+		// D01_SKYFLOW_POC mode: UNION queries with UDF detokenization (hardcoded db/table names)
 		query = s.buildUnionQuery(vaultConfig)
-	} else {
+	case "generic":
+		// Generic mode: UNION queries with configurable db/table names (reads *_TOKEN columns directly)
+		query = s.buildGenericQuery(vaultConfig)
+	default:
 		// Simple mode (default): ELEVANCE.PUBLIC.PATIENTS table
 		query = s.buildSimpleQuery(vaultConfig)
 	}
@@ -1609,7 +1687,9 @@ func main() {
 	sfSchema := flag.String("sf-schema", "", "Snowflake schema (overrides config)")
 	sfRole := flag.String("sf-role", "", "Snowflake role (overrides config)")
 	sfFetchSize := flag.Int("sf-fetch-size", 0, "Snowflake fetch size (overrides config)")
-	sfQueryMode := flag.String("sf-query-mode", "", "Query mode: simple or union (overrides config)")
+	sfQueryMode := flag.String("sf-query-mode", "", "Query mode: simple, union, or generic (overrides config)")
+	sfCLMTable := flag.String("sf-clm-table", "CLM", "CLM table name for union mode")
+	sfMBRTable := flag.String("sf-mbr-table", "MBR", "MBR table name for union mode")
 	sfStartRecord := flag.Int("start-record", 0, "Starting record offset (0-based, for manual chunking)")
 	sfEndRecord := flag.Int("end-record", 0, "Ending record (exclusive, 0 = no limit, for manual chunking)")
 
@@ -1617,7 +1697,7 @@ func main() {
 	batchSize := flag.Int("batch-size", 0, "Batch size for API calls (overrides config)")
 	maxConcurrency := flag.Int("concurrency", 0, "Maximum concurrent requests per vault (overrides config)")
 	maxRecords := flag.Int("max-records", -1, "Maximum records to process (overrides config, -1 uses config)")
-	appendSuffix := flag.Bool("append-suffix", true, "Append unique suffix to data/tokens")
+	appendSuffix := flag.Bool("append-suffix", false, "Append unique suffix to data/tokens")
 	baseDelay := flag.Int("base-delay-ms", -1, "Base delay between requests in milliseconds (overrides config, -1 uses config)")
 
 	// Other flags
@@ -1723,8 +1803,9 @@ You can now safely disconnect from SSH. The process will continue running.
 	}
 
 	// Helper function to override int values
-	overrideInt := func(cliValue, configValue int, defaultCheck int) int {
-		if cliValue != defaultCheck {
+	// Returns CLI value if explicitly set (different from flag default), otherwise returns config value
+	overrideInt := func(cliValue, configValue int, flagDefault int) int {
+		if cliValue != flagDefault {
 			return cliValue
 		}
 		return configValue
@@ -1799,6 +1880,8 @@ You can now safely disconnect from SSH. The process will continue running.
 			Role:          overrideString(*sfRole, fileConfig.Snowflake.Role),
 			FetchSize:     overrideInt(*sfFetchSize, fileConfig.Snowflake.FetchSize, 0),
 			QueryMode:     overrideString(*sfQueryMode, fileConfig.Snowflake.QueryMode),
+			CLMTable:      *sfCLMTable,
+			MBRTable:      *sfMBRTable,
 			StartRecord:   *sfStartRecord,
 			EndRecord:     *sfEndRecord,
 		},
