@@ -58,11 +58,12 @@ type CSVConfig struct {
 }
 
 type PerformanceConfig struct {
-	BatchSize      int  `json:"batch_size"`
-	MaxConcurrency int  `json:"max_concurrency"`
-	MaxRecords     int  `json:"max_records"`
-	AppendSuffix   bool `json:"append_suffix"`
-	BaseDelayMs    int  `json:"base_delay_ms"`
+	BatchSize      int   `json:"batch_size"`
+	MaxConcurrency int   `json:"max_concurrency"`
+	MaxRecords     int   `json:"max_records"`
+	AppendSuffix   bool  `json:"append_suffix"`
+	BaseDelayMs    int   `json:"base_delay_ms"`
+	Upsert         *bool `json:"upsert,omitempty"` // Pointer to distinguish between unset and false
 }
 
 // Configuration (runtime config used by the application)
@@ -73,6 +74,7 @@ type Config struct {
 	MaxConcurrency     int
 	MaxRecords         int
 	AppendSuffix       bool
+	Upsert             bool
 	DataSource         string // "csv" or "snowflake"
 	DataDirectory      string
 	ProgressInterval   int
@@ -815,11 +817,17 @@ func createBYOTPayload(records []Record, vaultConfig VaultConfig, config *Config
 		})
 	}
 
+	// Build payload - include upsert field if enabled
 	payload := map[string]interface{}{
 		"records":         recordsJSON,
 		"continueOnError": true,
 		"tokenization":    true,
 		"byot":            "ENABLE",
+	}
+
+	// Add upsert parameter if enabled (upsert on the column being inserted)
+	if config.Upsert {
+		payload["upsert"] = vaultConfig.Column
 	}
 
 	metrics.AddTime("payload_creation", time.Since(payloadStart))
@@ -1699,6 +1707,7 @@ func main() {
 	maxRecords := flag.Int("max-records", -1, "Maximum records to process (overrides config, -1 uses config)")
 	appendSuffix := flag.Bool("append-suffix", false, "Append unique suffix to data/tokens")
 	baseDelay := flag.Int("base-delay-ms", -1, "Base delay between requests in milliseconds (overrides config, -1 uses config)")
+	upsertFlag := flag.Bool("upsert", false, "Enable upsert mode (update existing records)")
 
 	// Other flags
 	vault := flag.String("vault", "", "Process only specific vault (name, id, dob, ssn)")
@@ -1858,6 +1867,14 @@ You can now safely disconnect from SSH. The process will continue running.
 		finalMaxRecords = 100
 	}
 
+	// Determine upsert mode (CLI flag OR config file, default true if not specified)
+	finalUpsert := true // Default to true
+	if upsertFlag != nil && *upsertFlag {
+		finalUpsert = true // Explicitly enabled via CLI
+	} else if fileConfig.Performance.Upsert != nil {
+		finalUpsert = *fileConfig.Performance.Upsert // Use config file value if set
+	}
+
 	config := &Config{
 		VaultURL:         overrideString(*vaultURL, fileConfig.Skyflow.VaultURL),
 		BearerToken:      finalBearerToken,
@@ -1865,6 +1882,7 @@ You can now safely disconnect from SSH. The process will continue running.
 		MaxConcurrency:   overrideInt(*maxConcurrency, fileConfig.Performance.MaxConcurrency, 0),
 		MaxRecords:       finalMaxRecords,
 		AppendSuffix:     *appendSuffix,
+		Upsert:           finalUpsert,
 		DataSource:       dataSourceValue,
 		DataDirectory:    overrideString(*dataDirectory, fileConfig.CSV.DataDirectory),
 		ProgressInterval: 1000,
