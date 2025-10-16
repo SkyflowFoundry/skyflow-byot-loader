@@ -1075,7 +1075,7 @@ func generateVaultRecordUnique(vaultType, timestamp string, recordID int64, rnd 
 
 // generateCompleteRecord generates a complete patient record with ALL vault fields populated
 // For Snowflake unified table mode - with GUARANTEED unique data values
-// Uses the token itself as the unique suffix to ensure deterministic uniqueness
+// Suffixes each value with its corresponding token to ensure uniqueness
 func generateCompleteRecord(timestamp string, recordID int64, rnd *rand.Rand) VaultRecord {
 	// Generate tokens first (these are unique and deterministic)
 	idToken := generateUniqueToken("tok_id", timestamp, recordID)
@@ -1275,8 +1275,8 @@ func main() {
 	fmt.Println("=" + strings.Repeat("=", 79))
 	fmt.Printf("\n")
 
-	// Generate timestamp for this run
-	timestamp := fmt.Sprintf("%d", time.Now().Unix())
+	// Generate timestamp for this run (nanosecond precision for uniqueness across runs)
+	timestamp := fmt.Sprintf("%d", time.Now().UnixNano())
 
 	// Setup output writer based on type
 	var writer OutputWriter
