@@ -8,11 +8,13 @@ High-performance Go implementation of the Skyflow BYOT (Bring Your Own Token) lo
 - [Installation](#installation)
 - [Configuration File](#configuration-file)
 - [Quick Start](#quick-start)
+- [Snowflake Authentication Methods](#snowflake-authentication-methods)
 - [Data Sources](#data-sources)
 - [Usage Examples](#usage-examples)
 - [Command-Line Reference](#command-line-reference)
 - [Performance Optimization](#performance-optimization)
 - [Architecture](#architecture)
+- [Performance Testing & Monitoring Utilities](#performance-testing--monitoring-utilities)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -21,13 +23,15 @@ High-performance Go implementation of the Skyflow BYOT (Bring Your Own Token) lo
 
 ### Core Capabilities
 - ✅ **True concurrency** with Go goroutines (no GIL limitations)
-- ✅ **Multiple data sources**: CSV files and Snowflake database
+- ✅ **Multiple data sources**: CSV files, Snowflake database, and error log files
 - ✅ **Flexible Snowflake queries**: Simple table mode and complex UNION mode
 - ✅ **Concurrent batch processing** with configurable worker pools
-- ✅ **Automatic retry logic** with exponential backoff
+- ✅ **Automatic retry logic** with exponential backoff (3 retries with backoff)
+- ✅ **Upsert support** for updating existing records
 - ✅ **Single-vault mode** for process-level parallelism
 - ✅ **Real-time progress reporting** with live metrics
-- ✅ **Error logging** for failed batches with retry capability
+- ✅ **Error logging** for failed batches with automatic retry capability
+- ✅ **Error log reprocessing** with confirmation and detailed statistics
 - ✅ **Detailed performance metrics** with timing breakdown
 
 ### Performance Benefits
@@ -163,6 +167,7 @@ By default, the loader looks for `config.json` in the current directory. You can
 - `max_records` - Max records to process, 0 = unlimited (default: 100000)
 - `append_suffix` - Add unique suffix to records (default: true)
 - `base_delay_ms` - Delay between requests in ms (default: 0)
+- `upsert` - Enable upsert mode to update existing records (default: false)
 
 ### Command-Line Overrides
 
@@ -472,6 +477,24 @@ GROUP BY 1, 2
   -max-records 50000
 ```
 
+#### Upsert Mode (Update Existing Records)
+```bash
+# Enable upsert to update existing records instead of inserting new ones
+./skyflow-loader -source snowflake -upsert
+
+# Upsert with specific vault
+./skyflow-loader -source snowflake -vault name -upsert
+
+# Useful for re-running loads or correcting data
+./skyflow-loader -source csv -upsert -vault id
+```
+
+**When to use upsert:**
+- Re-running a load that partially completed
+- Updating existing records with new tokens
+- Correcting data that was previously loaded
+- Reprocessing error logs (highly recommended)
+
 ### Advanced Examples
 
 #### Maximum Performance - 4 Parallel Processes
@@ -553,7 +576,8 @@ kill $(cat skyflow-loader.pid)
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-token` | *(from config)* | Skyflow bearer token (overrides config.json if provided) |
-| `-source` | `csv` | Data source: `csv` or `snowflake` |
+| `-source` | `csv` | Data source: `csv`, `snowflake`, or `error-log` |
+| `-error-log` | *(none)* | Path to error log JSON file for reprocessing failed records |
 | `-vault` | *(all)* | Process specific vault: `name`, `id`, `dob`, or `ssn` |
 | `-vault-url` | *(from config)* | Skyflow vault URL (overrides config.json) |
 
@@ -585,8 +609,9 @@ kill $(cat skyflow-loader.pid)
 | `-batch-size` | `300` | Records per API batch |
 | `-concurrency` | `32` | Concurrent workers per vault |
 | `-max-records` | `100000` (CSV) / `100` (Snowflake) | Max records per vault (0=unlimited) |
-| `-append-suffix` | `true` | Append unique suffix to data/tokens |
+| `-append-suffix` | `false` | Append unique suffix to data/tokens |
 | `-base-delay-ms` | `0` | Delay between requests (milliseconds) |
+| `-upsert` | `false` | Enable upsert mode (update existing records instead of insert) |
 
 ### Utility Flags
 
@@ -801,7 +826,94 @@ When batches fail permanently (after all retries), the loader automatically crea
 - ✅ One file per vault with failures
 
 **Re-running Failed Records:**
-Error logs contain all data needed to identify and re-run failed batches separately.
+
+The loader provides a dedicated error log reprocessing mode that makes it easy to retry failed records:
+
+```bash
+# Reprocess failed records from error log
+./skyflow-loader -error-log error_log_NAME_20251016_143052.json
+
+# With upsert enabled (recommended for retries)
+./skyflow-loader -error-log error_log_NAME_20251016_143052.json -upsert
+
+# With custom settings
+./skyflow-loader -error-log error_log_NAME_20251016_143052.json -upsert -concurrency 64
+```
+
+**What happens:**
+1. **Loads error log** - Reads all failed records (with their original value/token pairs)
+2. **Shows detailed statistics** - Displays:
+   - Error log metadata (vault, timestamp, time since error)
+   - Record counts (failed batches, failed records, average batch size)
+   - Error breakdown by HTTP status code (429s, 5xx, etc.)
+   - Reprocessing plan (batch size, concurrency, upsert status)
+   - Estimated runtime
+3. **Requests confirmation** - User must type "yes" or "y" to proceed
+4. **Reprocesses records** - Uses same batch processing with retries
+5. **Creates new error log** - If any records still fail (allowing recursive retries)
+
+**Example confirmation screen:**
+```
+================================================================================
+ERROR LOG ANALYSIS
+================================================================================
+
+📋 ERROR LOG INFORMATION:
+   File: error_log_NAME_20251016_143052.json
+   Vault: NAME (ID: s6d7b3b9f3a041d083c18cf66d6e4442, Column: name)
+   Original Error Timestamp: 2025-10-16 14:30:52
+   Time Since Error: 2h 15m 30s ago
+
+📊 RECORD COUNTS:
+   Failed Batches: 334
+   Failed Records: 100,200
+   Average Batch Size: 300.0 records/batch
+
+⚠️  ERROR BREAKDOWN:
+   Network Errors: 45 batches
+   HTTP 429 (Rate Limited): 198 batches
+   HTTP 500 (Server Error): 67 batches
+   HTTP 503 (Server Error): 24 batches
+
+🔄 REPROCESSING PLAN:
+   Batch Size: 300 records/batch
+   Concurrency: 32 workers
+   Total Batches: 334
+   Upsert Mode: ✅ ENABLED (will update existing records)
+
+⏱️  ESTIMATED RUNTIME:
+   Estimated Time: ~2.1 minutes
+   (Actual time may vary based on API response times and rate limits)
+
+================================================================================
+⚠️  WARNING: This will attempt to reprocess 100,200 records.
+================================================================================
+
+Do you want to proceed? (yes/no):
+```
+
+**Benefits:**
+- ✅ No need to reload entire dataset (reprocess only failures)
+- ✅ Preserves exact value/token pairs from original load
+- ✅ Automatic vault detection from error log
+- ✅ Detailed error analysis before confirmation
+- ✅ Works with all performance flags
+- ✅ Can be run recursively until all records succeed
+
+**Typical workflow for 500M record load:**
+```bash
+# Initial load (takes ~10 hours, gets 499.9M records, 100K failures)
+./skyflow-loader -source snowflake -max-records 0 -offline
+
+# Review error log
+cat error_log_NAME_20251016_230045.json
+
+# Reprocess failures (~2 minutes)
+./skyflow-loader -error-log error_log_NAME_20251016_230045.json -upsert
+
+# If any still fail, repeat
+./skyflow-loader -error-log error_log_NAME_20251017_010512.json -upsert
+```
 
 ---
 
@@ -885,6 +997,12 @@ go build -o clear-vaults clear_vaults.go
 - Check Skyflow API rate limits
 - Verify bearer token is valid and not expired
 - **Review error log file** (`error_log_<vault>_<timestamp>.json`) for specific API errors and failed records
+- **Reprocess failures** using `-error-log` flag with `-upsert` enabled
+
+#### "Records already exist" errors
+- Use `-upsert` flag to update existing records instead of inserting
+- Particularly important when reprocessing error logs
+- Example: `./skyflow-loader -error-log error_log_NAME_*.json -upsert`
 
 #### Slow performance
 - Increase `-concurrency` (try 64 or 128)
