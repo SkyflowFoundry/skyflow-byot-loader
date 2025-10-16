@@ -94,8 +94,9 @@ type SnowflakeConfig struct {
 	Role          string
 	FetchSize     int
 	QueryMode     string // "simple", "union", or "generic"
-	CLMTable      string // CLM table name for union mode (e.g., "CLM_20251013_144708")
-	MBRTable      string // MBR table name for union mode (e.g., "MBR_20251013_144708")
+	SimpleTable   string // Table name for simple mode (e.g., "PATIENTS") - fully qualified with DB.SCHEMA.TABLE
+	CLMTable      string // CLM table name for union/generic mode (e.g., "CLM_20251013_144708")
+	MBRTable      string // MBR table name for union/generic mode (e.g., "MBR_20251013_144708")
 	StartRecord   int    // Starting record offset (0-based)
 	EndRecord     int    // Ending record (exclusive, 0 = no limit)
 }
@@ -537,26 +538,37 @@ func (s *SnowflakeDataSource) Close() error {
 	return nil
 }
 
-// buildSimpleQuery creates query for ELEVANCE.PUBLIC.PATIENTS table
+// buildSimpleQuery creates query for simple mode (single table with value + token columns)
 func (s *SnowflakeDataSource) buildSimpleQuery(vaultConfig VaultConfig) string {
+	// Build fully qualified table name
+	tableName := s.Config.SimpleTable
+	if tableName == "" {
+		// Default to ELEVANCE.PUBLIC.PATIENTS for backwards compatibility
+		tableName = "ELEVANCE.PUBLIC.PATIENTS"
+	}
+	// If table doesn't contain dots, prepend database.schema
+	if !strings.Contains(tableName, ".") {
+		tableName = fmt.Sprintf("%s.%s.%s", s.Config.Database, s.Config.Schema, tableName)
+	}
+
 	var query string
 	switch vaultConfig.Column {
 	case "name":
-		query = `SELECT DISTINCT UPPER(full_name) AS full_name, full_name_token
-				FROM ELEVANCE.PUBLIC.PATIENTS
-				WHERE full_name IS NOT NULL AND full_name_token IS NOT NULL`
+		query = fmt.Sprintf(`SELECT DISTINCT UPPER(full_name) AS full_name, full_name_token
+				FROM %s
+				WHERE full_name IS NOT NULL AND full_name_token IS NOT NULL`, tableName)
 	case "id":
-		query = `SELECT DISTINCT TO_VARCHAR(id) AS id, id_token
-				FROM ELEVANCE.PUBLIC.PATIENTS
-				WHERE id IS NOT NULL AND id_token IS NOT NULL`
+		query = fmt.Sprintf(`SELECT DISTINCT TO_VARCHAR(id) AS id, id_token
+				FROM %s
+				WHERE id IS NOT NULL AND id_token IS NOT NULL`, tableName)
 	case "dob":
-		query = `SELECT DISTINCT TO_VARCHAR(dob) AS dob, dob_token
-				FROM ELEVANCE.PUBLIC.PATIENTS
-				WHERE dob IS NOT NULL AND dob_token IS NOT NULL`
+		query = fmt.Sprintf(`SELECT DISTINCT TO_VARCHAR(dob) AS dob, dob_token
+				FROM %s
+				WHERE dob IS NOT NULL AND dob_token IS NOT NULL`, tableName)
 	case "ssn":
-		query = `SELECT DISTINCT TO_VARCHAR(ssn) AS ssn, ssn_token
-				FROM ELEVANCE.PUBLIC.PATIENTS
-				WHERE ssn IS NOT NULL AND ssn_token IS NOT NULL`
+		query = fmt.Sprintf(`SELECT DISTINCT TO_VARCHAR(ssn) AS ssn, ssn_token
+				FROM %s
+				WHERE ssn IS NOT NULL AND ssn_token IS NOT NULL`, tableName)
 	}
 	return query
 }
@@ -1891,8 +1903,9 @@ func main() {
 	sfRole := flag.String("sf-role", "", "Snowflake role (overrides config)")
 	sfFetchSize := flag.Int("sf-fetch-size", 0, "Snowflake fetch size (overrides config)")
 	sfQueryMode := flag.String("sf-query-mode", "", "Query mode: simple, union, or generic (overrides config)")
-	sfCLMTable := flag.String("sf-clm-table", "CLM", "CLM table name for union mode")
-	sfMBRTable := flag.String("sf-mbr-table", "MBR", "MBR table name for union mode")
+	sfTable := flag.String("sf-table", "", "Table name for simple mode (e.g., PATIENTS or DB.SCHEMA.TABLE)")
+	sfCLMTable := flag.String("sf-clm-table", "CLM", "CLM table name for union/generic mode")
+	sfMBRTable := flag.String("sf-mbr-table", "MBR", "MBR table name for union/generic mode")
 	sfStartRecord := flag.Int("start-record", 0, "Starting record offset (0-based, for manual chunking)")
 	sfEndRecord := flag.Int("end-record", 0, "Ending record (exclusive, 0 = no limit, for manual chunking)")
 
@@ -2088,6 +2101,7 @@ You can now safely disconnect from SSH. The process will continue running.
 			Role:          overrideString(*sfRole, fileConfig.Snowflake.Role),
 			FetchSize:     overrideInt(*sfFetchSize, fileConfig.Snowflake.FetchSize, 0),
 			QueryMode:     overrideString(*sfQueryMode, fileConfig.Snowflake.QueryMode),
+			SimpleTable:   *sfTable,
 			CLMTable:      *sfCLMTable,
 			MBRTable:      *sfMBRTable,
 			StartRecord:   *sfStartRecord,
