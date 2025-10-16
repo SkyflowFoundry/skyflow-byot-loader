@@ -63,6 +63,7 @@ type PerformanceConfig struct {
 	MaxRecords     int  `json:"max_records"`
 	AppendSuffix   bool `json:"append_suffix"`
 	BaseDelayMs    int  `json:"base_delay_ms"`
+	Upsert         bool `json:"upsert"`
 }
 
 // Configuration (runtime config used by the application)
@@ -73,6 +74,7 @@ type Config struct {
 	MaxConcurrency   int
 	MaxRecords       int
 	AppendSuffix     bool
+	Upsert           bool
 	DataSource       string // "csv" or "snowflake"
 	DataDirectory    string
 	ProgressInterval int
@@ -278,6 +280,77 @@ func generateUniqueSuffix() string {
 	// Avoid fmt.Sprintf - use string concatenation with strconv
 	timestamp := time.Now().Unix()
 	return strconv.FormatInt(timestamp, 10) + "_" + string(suffix)
+}
+
+// ErrorLogDataSource implements DataSource interface for error log JSON files
+type ErrorLogDataSource struct {
+	ErrorLogPath string
+	VaultName    string
+	VaultID      string
+	Column       string
+	Records      []Record
+	ErrorLog     ErrorLogMetadata
+}
+
+// ErrorLogMetadata contains metadata about the error log
+type ErrorLogMetadata struct {
+	Timestamp     time.Time    `json:"timestamp"`
+	TotalErrors   int          `json:"total_errors"`
+	FailedRecords int          `json:"failed_records"`
+	Errors        []BatchError `json:"errors"`
+}
+
+// Connect loads and parses the error log file
+func (e *ErrorLogDataSource) Connect() error {
+	file, err := os.Open(e.ErrorLogPath)
+	if err != nil {
+		return fmt.Errorf("failed to open error log file: %w", err)
+	}
+	defer file.Close()
+
+	var errorLog struct {
+		VaultName     string       `json:"vault_name"`
+		VaultID       string       `json:"vault_id"`
+		Column        string       `json:"column"`
+		Timestamp     time.Time    `json:"timestamp"`
+		TotalErrors   int          `json:"total_errors"`
+		FailedRecords int          `json:"failed_records"`
+		Errors        []BatchError `json:"errors"`
+	}
+
+	if err := json.NewDecoder(file).Decode(&errorLog); err != nil {
+		return fmt.Errorf("failed to parse error log: %w", err)
+	}
+
+	e.VaultName = errorLog.VaultName
+	e.VaultID = errorLog.VaultID
+	e.Column = errorLog.Column
+	e.ErrorLog = ErrorLogMetadata{
+		Timestamp:     errorLog.Timestamp,
+		TotalErrors:   errorLog.TotalErrors,
+		FailedRecords: errorLog.FailedRecords,
+		Errors:        errorLog.Errors,
+	}
+
+	// Extract all records from all failed batches
+	for _, batchErr := range errorLog.Errors {
+		e.Records = append(e.Records, batchErr.Records...)
+	}
+
+	return nil
+}
+
+// Close is a no-op for error log files
+func (e *ErrorLogDataSource) Close() error {
+	return nil
+}
+
+// ReadRecords returns the records loaded from the error log
+func (e *ErrorLogDataSource) ReadRecords(vaultConfig VaultConfig, maxRecords int) ([]Record, error) {
+	if maxRecords > 0 && maxRecords < len(e.Records) {
+		return e.Records[:maxRecords], nil
+	}
+	return e.Records, nil
 }
 
 // CSVDataSource implements DataSource interface for local CSV files
@@ -820,6 +893,11 @@ func createBYOTPayload(records []Record, vaultConfig VaultConfig, config *Config
 		"continueOnError": true,
 		"tokenization":    true,
 		"byot":            "ENABLE",
+	}
+
+	// Add upsert parameter if enabled (upsert on the column being inserted)
+	if config.Upsert {
+		payload["upsert"] = vaultConfig.Column
 	}
 
 	metrics.AddTime("payload_creation", time.Since(payloadStart))
@@ -1586,6 +1664,119 @@ func promptForInput(prompt string) (string, error) {
 	return strings.TrimSpace(input), nil
 }
 
+// displayErrorLogStats shows detailed statistics about the error log and prompts for confirmation
+func displayErrorLogStats(errorLogSource *ErrorLogDataSource, config *Config) (bool, error) {
+	fmt.Printf("\n%s\n", strings.Repeat("=", 80))
+	fmt.Printf("ERROR LOG ANALYSIS\n")
+	fmt.Printf("%s\n", strings.Repeat("=", 80))
+
+	// Basic metadata
+	fmt.Printf("\n📋 ERROR LOG INFORMATION:\n")
+	fmt.Printf("   File: %s\n", errorLogSource.ErrorLogPath)
+	fmt.Printf("   Vault: %s (ID: %s, Column: %s)\n",
+		errorLogSource.VaultName, errorLogSource.VaultID, errorLogSource.Column)
+	fmt.Printf("   Original Error Timestamp: %s\n", errorLogSource.ErrorLog.Timestamp.Format("2006-01-02 15:04:05"))
+	fmt.Printf("   Time Since Error: %s ago\n", time.Since(errorLogSource.ErrorLog.Timestamp).Round(time.Second))
+
+	// Record counts
+	fmt.Printf("\n📊 RECORD COUNTS:\n")
+	fmt.Printf("   Failed Batches: %s\n", formatNumber(errorLogSource.ErrorLog.TotalErrors))
+	fmt.Printf("   Failed Records: %s\n", formatNumber(len(errorLogSource.Records)))
+	if errorLogSource.ErrorLog.TotalErrors > 0 {
+		avgBatchSize := float64(len(errorLogSource.Records)) / float64(errorLogSource.ErrorLog.TotalErrors)
+		fmt.Printf("   Average Batch Size: %.1f records/batch\n", avgBatchSize)
+	}
+
+	// Error breakdown by status code
+	errorsByStatus := make(map[int]int)
+	networkErrors := 0
+	for _, batchErr := range errorLogSource.ErrorLog.Errors {
+		if batchErr.StatusCode == 0 {
+			networkErrors++
+		} else {
+			errorsByStatus[batchErr.StatusCode]++
+		}
+	}
+
+	fmt.Printf("\n⚠️  ERROR BREAKDOWN:\n")
+	if networkErrors > 0 {
+		fmt.Printf("   Network Errors: %s batches\n", formatNumber(networkErrors))
+	}
+	// Sort status codes for consistent display
+	var statusCodes []int
+	for code := range errorsByStatus {
+		statusCodes = append(statusCodes, code)
+	}
+	for i := 0; i < len(statusCodes); i++ {
+		for j := i + 1; j < len(statusCodes); j++ {
+			if statusCodes[i] > statusCodes[j] {
+				statusCodes[i], statusCodes[j] = statusCodes[j], statusCodes[i]
+			}
+		}
+	}
+	for _, code := range statusCodes {
+		count := errorsByStatus[code]
+		errorType := "Other"
+		if code == 429 {
+			errorType = "Rate Limited"
+		} else if code >= 500 {
+			errorType = "Server Error"
+		} else if code >= 400 {
+			errorType = "Client Error"
+		}
+		fmt.Printf("   HTTP %d (%s): %s batches\n", code, errorType, formatNumber(count))
+	}
+
+	// Processing plan
+	fmt.Printf("\n🔄 REPROCESSING PLAN:\n")
+	fmt.Printf("   Batch Size: %s records/batch\n", formatNumber(config.BatchSize))
+	fmt.Printf("   Concurrency: %d workers\n", config.MaxConcurrency)
+	numBatches := (len(errorLogSource.Records) + config.BatchSize - 1) / config.BatchSize
+	fmt.Printf("   Total Batches: %s\n", formatNumber(numBatches))
+	if config.Upsert {
+		fmt.Printf("   Upsert Mode: ✅ ENABLED (will update existing records)\n")
+	} else {
+		fmt.Printf("   Upsert Mode: ❌ DISABLED (will attempt to insert new records)\n")
+	}
+
+	// Estimated runtime
+	fmt.Printf("\n⏱️  ESTIMATED RUNTIME:\n")
+	// Assume ~200ms per batch average (including retries)
+	avgBatchTime := 0.2 // seconds
+	estimatedSeconds := float64(numBatches) * avgBatchTime / float64(config.MaxConcurrency)
+	if estimatedSeconds < 60 {
+		fmt.Printf("   Estimated Time: ~%.0f seconds\n", estimatedSeconds)
+	} else if estimatedSeconds < 3600 {
+		fmt.Printf("   Estimated Time: ~%.1f minutes\n", estimatedSeconds/60)
+	} else {
+		fmt.Printf("   Estimated Time: ~%.1f hours\n", estimatedSeconds/3600)
+	}
+	fmt.Printf("   (Actual time may vary based on API response times and rate limits)\n")
+
+	// Confirmation prompt
+	fmt.Printf("\n%s\n", strings.Repeat("=", 80))
+	fmt.Printf("⚠️  WARNING: This will attempt to reprocess %s records.\n", formatNumber(len(errorLogSource.Records)))
+	if !config.Upsert {
+		fmt.Printf("⚠️  Upsert is DISABLED - records may fail if they already exist.\n")
+		fmt.Printf("    Consider adding the -upsert flag if you want to update existing records.\n")
+	}
+	fmt.Printf("%s\n\n", strings.Repeat("=", 80))
+
+	// Prompt for confirmation
+	response, err := promptForInput("Do you want to proceed? (yes/no): ")
+	if err != nil {
+		return false, err
+	}
+
+	response = strings.ToLower(strings.TrimSpace(response))
+	return response == "yes" || response == "y", nil
+}
+
+// formatNumber formats an integer with comma separators
+func formatNumberInt(n int) string {
+	return formatNumber(n)
+}
+
 func clearAllVaults(config *Config, vaults []VaultConfig) error {
 	fmt.Printf("\n%s\n", strings.Repeat("=", 80))
 	fmt.Printf("CLEARING VAULT DATA (TEST USE ONLY)\n")
@@ -1670,7 +1861,8 @@ func main() {
 
 	// Override flags (optional - override config file values)
 	vaultURL := flag.String("vault-url", "", "Skyflow vault URL (overrides config)")
-	dataSource := flag.String("source", "", "Data source: csv or snowflake (overrides config)")
+	dataSource := flag.String("source", "", "Data source: csv, snowflake, or error-log (overrides config)")
+	errorLog := flag.String("error-log", "", "Path to error log JSON file (for reprocessing failed records)")
 
 	// CSV override flags
 	dataDirectory := flag.String("data-dir", "", "Path to data directory containing vault CSV files (overrides config)")
@@ -1697,6 +1889,7 @@ func main() {
 	maxRecords := flag.Int("max-records", -1, "Maximum records to process (overrides config, -1 uses config)")
 	appendSuffix := flag.Bool("append-suffix", false, "Append unique suffix to data/tokens")
 	baseDelay := flag.Int("base-delay-ms", -1, "Base delay between requests in milliseconds (overrides config, -1 uses config)")
+	upsertFlag := flag.Bool("upsert", false, "Enable upsert mode (update existing records)")
 
 	// Other flags
 	vault := flag.String("vault", "", "Process only specific vault (name, id, dob, ssn)")
@@ -1856,6 +2049,9 @@ You can now safely disconnect from SSH. The process will continue running.
 		finalMaxRecords = 100
 	}
 
+	// Determine upsert mode (CLI flag OR config file)
+	finalUpsert := *upsertFlag || fileConfig.Performance.Upsert
+
 	config := &Config{
 		VaultURL:         overrideString(*vaultURL, fileConfig.Skyflow.VaultURL),
 		BearerToken:      finalBearerToken,
@@ -1863,6 +2059,7 @@ You can now safely disconnect from SSH. The process will continue running.
 		MaxConcurrency:   overrideInt(*maxConcurrency, fileConfig.Performance.MaxConcurrency, 0),
 		MaxRecords:       finalMaxRecords,
 		AppendSuffix:     *appendSuffix,
+		Upsert:           finalUpsert,
 		DataSource:       dataSourceValue,
 		DataDirectory:    overrideString(*dataDirectory, fileConfig.CSV.DataDirectory),
 		ProgressInterval: 1000,
@@ -1914,7 +2111,46 @@ You can now safely disconnect from SSH. The process will continue running.
 	// Initialize data source
 	var ds DataSource
 
-	if config.DataSource == "snowflake" {
+	if *errorLog != "" {
+		// Error log mode - override data source
+		errorLogSource := &ErrorLogDataSource{
+			ErrorLogPath: *errorLog,
+		}
+		if err := errorLogSource.Connect(); err != nil {
+			fmt.Printf("❌ Failed to load error log: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Override vault filter to match the error log's vault
+		var filtered []VaultConfig
+		for _, v := range vaults {
+			if strings.EqualFold(v.Name, errorLogSource.VaultName) {
+				filtered = []VaultConfig{v}
+				break
+			}
+		}
+		if len(filtered) == 0 {
+			fmt.Printf("❌ Error: Vault '%s' from error log not found in config\n", errorLogSource.VaultName)
+			os.Exit(1)
+		}
+		vaults = filtered
+
+		// Display stats and get confirmation
+		proceed, err := displayErrorLogStats(errorLogSource, config)
+		if err != nil {
+			fmt.Printf("❌ Error getting confirmation: %v\n", err)
+			os.Exit(1)
+		}
+		if !proceed {
+			fmt.Printf("\n❌ Operation cancelled by user.\n")
+			os.Exit(0)
+		}
+
+		fmt.Printf("\n✅ Proceeding with reprocessing...\n")
+
+		ds = errorLogSource
+		defer ds.Close()
+	} else if config.DataSource == "snowflake" {
 		fmt.Printf("❄️  Using Snowflake data source\n")
 		fmt.Printf("   User: %s\n", config.SnowflakeConfig.User)
 		fmt.Printf("   Account: %s\n", config.SnowflakeConfig.Account)
