@@ -1773,8 +1773,21 @@ func displayErrorLogStats(errorLogSource *ErrorLogDataSource, config *Config) (b
 }
 
 // formatNumber formats an integer with comma separators
-func formatNumberInt(n int) string {
-	return formatNumber(n)
+func formatNumber(n int) string {
+	s := strconv.Itoa(n)
+	if len(s) <= 3 {
+		return s
+	}
+
+	// Add commas from right to left
+	var result []byte
+	for i, digit := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			result = append(result, ',')
+		}
+		result = append(result, byte(digit))
+	}
+	return string(result)
 }
 
 func clearAllVaults(config *Config, vaults []VaultConfig) error {
