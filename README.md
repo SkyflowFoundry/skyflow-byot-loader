@@ -3,19 +3,73 @@
 High-performance Go implementation of the Skyflow BYOT (Bring Your Own Token) loader with support for multiple data sources.
 
 ## Table of Contents
+- [Quick Start in 5 Minutes](#quick-start-in-5-minutes)
 - [Features](#features)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Configuration File](#configuration-file)
-- [Quick Start](#quick-start)
+- [Usage Examples](#usage-examples)
 - [Snowflake Authentication Methods](#snowflake-authentication-methods)
 - [Data Sources](#data-sources)
-- [Usage Examples](#usage-examples)
+- [Advanced Usage Examples](#advanced-usage-examples)
 - [Command-Line Reference](#command-line-reference)
 - [Performance Optimization](#performance-optimization)
 - [Architecture](#architecture)
 - [Performance Testing & Monitoring Utilities](#performance-testing--monitoring-utilities)
 - [Troubleshooting](#troubleshooting)
+
+---
+
+## Quick Start in 5 Minutes
+
+Get up and running with the Skyflow BYOT Loader in just a few steps:
+
+### Step 1: Install (1 minute)
+```bash
+# Install dependencies
+./install_dependencies.sh
+
+# Build the loader
+go build -o skyflow-loader main.go
+```
+
+### Step 2: Configure (2 minutes)
+```bash
+# Copy the example configuration
+cp config.example.json config.json
+
+# Edit these 3 essential fields in config.json:
+# 1. skyflow.vault_url - Your Skyflow vault URL
+# 2. skyflow.vaults[].id - Your vault IDs (one per vault: NAME, ID, DOB, SSN)
+# 3. For Snowflake: snowflake.account, warehouse, database (or skip for CSV mode)
+```
+
+### Step 3: Run (2 minutes)
+```bash
+# Option A: CSV mode (with test data)
+./generate_mock_data -count=10000 -output=csv
+./skyflow-loader -source csv
+# You'll be prompted for your Skyflow bearer token
+
+# Option B: Snowflake mode
+./skyflow-loader -source snowflake -max-records 1000
+# You'll be prompted for: bearer token, Snowflake username, and password
+```
+
+**That's it!** You should see progress updates and performance metrics as records are processed.
+
+### What to Try Next
+- **Process all vaults**: `./skyflow-loader -source snowflake -max-records 0` (unlimited)
+- **Single vault for speed**: `./skyflow-loader -vault name -concurrency 64`
+- **Maximum performance**: Run 4 parallel processes (one per vault):
+  ```bash
+  for vault in name id dob ssn; do
+    ./skyflow-loader -source snowflake -vault $vault &
+  done
+  wait
+  ```
+
+For detailed configuration options, see [Configuration File](#configuration-file) below.
 
 ---
 
@@ -96,11 +150,13 @@ By default, the loader looks for `config.json` in the current directory. You can
 
 ### Configuration Structure
 
+Below is a complete example configuration. You can leave credentials empty and provide them via CLI flags or interactive prompts (recommended for security).
+
 ```json
 {
   "skyflow": {
     "vault_url": "https://your_vault.vault.skyflowapis.com",
-    "bearer_token": "",
+    "bearer_token": "",  // Leave empty to use -token flag or interactive prompt
     "vaults": [
       {
         "name": "NAME",
@@ -110,23 +166,23 @@ By default, the loader looks for `config.json` in the current directory. You can
     ]
   },
   "snowflake": {
-    "user": "",
-    "password": "",
+    "user": "",  // Leave empty to use -sf-user flag or interactive prompt
+    "password": "",  // Leave empty to use -sf-password flag or interactive prompt
     "account": "YOUR_ACCOUNT",
     "warehouse": "YOUR_WAREHOUSE",
     "database": "YOUR_DATABASE",
     "schema": "PUBLIC",
     "role": "YOUR_ROLE",
     "fetch_size": 100000,
-    "query_mode": "simple"
+    "query_mode": "simple"  // Use "simple" for single table, "union" for complex queries
   },
   "csv": {
     "data_directory": "data"
   },
   "performance": {
-    "batch_size": 300,
-    "max_concurrency": 32,
-    "max_records": 100000,
+    "batch_size": 300,  // Records per API call (recommended: 300)
+    "max_concurrency": 32,  // Parallel workers (increase to 64-128 for large datasets)
+    "max_records": 100000,  // Limit records per vault (0 = unlimited)
     "append_suffix": true,
     "base_delay_ms": 0
   }
@@ -226,9 +282,9 @@ All config file values can be overridden via command-line flags:
 
 ---
 
-## Quick Start
+## Usage Examples
 
-Once you've configured `config.json`, running the loader is simple:
+Once you've configured `config.json`, here are common usage patterns:
 
 ### Run with Interactive Prompts (Recommended)
 ```bash
@@ -273,7 +329,17 @@ Once you've configured `config.json`, running the loader is simple:
 
 ## Snowflake Authentication Methods
 
-The loader supports multiple Snowflake authentication methods:
+The loader supports multiple Snowflake authentication methods. Choose the method that best fits your use case:
+
+### Which Authentication Method Should I Use?
+
+| Method | Best For | Security | Setup Complexity | Token Expiration |
+|--------|----------|----------|------------------|------------------|
+| **Username/Password** | Local development, testing | ⭐⭐ | ⭐ Easy | Password-based |
+| **PAT Token** | Production, EC2/SSH, automation | ⭐⭐⭐⭐ | ⭐⭐ Moderate | 90 days (renewable) |
+| **Key-Pair (JWT)** | Enterprise production, highest security | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ Complex | Key-based (long-lived) |
+
+**Recommendation:** Use **PAT tokens** for most production scenarios, especially on EC2 instances or in automation workflows.
 
 ### 1. Username/Password (Default)
 Standard authentication with username and password.
@@ -386,11 +452,32 @@ Use the included mock data generator:
 
 **Note:** Snowflake source defaults to **100 records** unless `-max-records` is specified. This prevents accidentally pulling millions of rows during testing.
 
+#### Which Query Mode Should I Use?
+
+Use this decision tree to choose between `simple` and `union` mode:
+
+```
+Do you have a single table with all data and tokens?
+│
+├─ YES → Use SIMPLE mode
+│         ✅ Single table: PATIENTS or similar
+│         ✅ Columns like: full_name, full_name_token
+│         ✅ Fastest and simplest option
+│
+└─ NO → Use UNION mode
+          ✅ Multiple tables to combine (CLM, MBR, etc.)
+          ✅ Using Skyflow UDF functions (SKFL_*_DETOK)
+          ✅ Complex schema with unions needed
+```
+
+**Quick test:** If you can run `SELECT full_name, full_name_token FROM PATIENTS` successfully, use **simple mode**.
+
 #### Simple Mode (Default)
-Queries a single table: `ELEVANCE.PUBLIC.PATIENTS`
+
+Queries a single table: `ELEVANCE.PUBLIC.PATIENTS`. This is the fastest and most straightforward option when your data and tokens are in one table.
 
 ```bash
-# Test with default 100 records
+# Test with default 100 records (recommended first try)
 ./skyflow-loader \
   -token "YOUR_TOKEN" \
   -source snowflake \
@@ -398,7 +485,7 @@ Queries a single table: `ELEVANCE.PUBLIC.PATIENTS`
   -sf-database "SKYFLOW_DEMO" \
   -sf-schema "PUBLIC"
 
-# Pull all records
+# Pull all records after testing
 ./skyflow-loader \
   -token "YOUR_TOKEN" \
   -source snowflake \
@@ -406,15 +493,18 @@ Queries a single table: `ELEVANCE.PUBLIC.PATIENTS`
   -max-records 0
 ```
 
-**Queries executed:**
+**Example query executed for NAME vault:**
 ```sql
 SELECT DISTINCT UPPER(full_name) AS full_name, full_name_token
 FROM ELEVANCE.PUBLIC.PATIENTS
 WHERE full_name IS NOT NULL AND full_name_token IS NOT NULL
 ```
 
+Similar queries run for ID, DOB, and SSN vaults using their respective columns.
+
 #### Union Mode (Advanced)
-For complex schemas with multiple tables and UDF detokenization.
+
+For complex schemas with multiple tables and UDF detokenization. Use this when your data is spread across multiple tables (e.g., claims and member tables) or when using Skyflow's custom detokenization UDFs.
 
 ```bash
 ./skyflow-loader \
@@ -425,9 +515,9 @@ For complex schemas with multiple tables and UDF detokenization.
   -sf-schema "SKYFLOW_POC"
 ```
 
-**Queries executed:**
+**Example query executed for SSN vault (combining CLM and MBR tables):**
 ```sql
--- Example: SSN from CLM and MBR tables
+-- Combines SSN values from multiple tables using UNION
 SELECT SSN, SKFL_SSN_DETOK(SSN) AS ssn_token
 FROM (
   SELECT SRC_MBR_SSN AS SSN FROM D01_SKYFLOW_POC.SKYFLOW_POC.CLM GROUP BY 1
@@ -437,15 +527,17 @@ FROM (
 GROUP BY 1, 2
 ```
 
-**Supported UDF Functions:**
-- `SKFL_SSN_DETOK()`
-- `SKFL_BIRTHDATE_DETOK()`
-- `SKFL_MBR_NAME_DETOK()`
-- `SKFL_MBR_IDENTIFIERS_DETOK()`
+**Supported Skyflow UDF Functions:**
+- `SKFL_SSN_DETOK()` - For Social Security Numbers
+- `SKFL_BIRTHDATE_DETOK()` - For dates of birth
+- `SKFL_MBR_NAME_DETOK()` - For member names
+- `SKFL_MBR_IDENTIFIERS_DETOK()` - For member IDs
+
+These UDFs must be pre-configured in your Snowflake environment by your Skyflow team.
 
 ---
 
-## Usage Examples
+## Advanced Usage Examples
 
 ### Basic Examples
 
@@ -794,6 +886,8 @@ When batches fail permanently (after all retries), the loader automatically crea
 
 **Error Log File:** `error_log_<vault>_<timestamp>.json`
 
+This file contains all the information needed to retry failed records, including the complete data and tokens.
+
 **Example: `error_log_ID_20251009_153045.json`**
 ```json
 {
@@ -808,12 +902,21 @@ When batches fail permanently (after all retries), the loader automatically crea
       "batch_number": 42,
       "records": [
         {"Value": "123", "Token": "tok_456"},
-        ...
+        {"Value": "456", "Token": "tok_789"}
+        // ... (up to 300 records per batch)
       ],
       "error": "API request failed with status 500 after 5 retries",
       "status_code": 500,
       "timestamp": "2025-10-09T15:30:12Z"
+    },
+    {
+      "batch_number": 87,
+      "records": [ /* ... */ ],
+      "error": "Network timeout",
+      "status_code": 0,
+      "timestamp": "2025-10-09T15:32:45Z"
     }
+    // ... more failed batches
   ]
 }
 ```
