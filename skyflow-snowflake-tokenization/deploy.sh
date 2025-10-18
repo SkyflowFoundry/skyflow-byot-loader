@@ -130,58 +130,83 @@ echo ""
 # Deploy Function
 # ============================================================================
 deploy() {
+    local USE_CONFIG_FILE=false
+
+    # Check if we should use config file instead of Secrets Manager
+    if [ "$1" == "--use-config-file" ]; then
+        USE_CONFIG_FILE=true
+        echo -e "${YELLOW}Deployment mode: ${GREEN}File-based config (credentials.json)${NC}"
+    else
+        echo -e "${YELLOW}Deployment mode: ${GREEN}AWS Secrets Manager${NC}"
+    fi
+    echo ""
+
     echo -e "${YELLOW}Starting deployment...${NC}"
     echo ""
 
-    # Step 1: Create/Update AWS Secrets Manager secret
-    echo -e "${BLUE}[1/8]${NC} Creating/Updating AWS Secrets Manager secret..."
+    # Step 1: Create/Update AWS Secrets Manager secret (skip if using config file)
+    if [ "$USE_CONFIG_FILE" = true ]; then
+        echo -e "${BLUE}[1/8]${NC} Skipping AWS Secrets Manager (using file-based config)..."
 
-    # Check if secrets-manager-config.json exists
-    if [ ! -f "lambda/secrets-manager-config.json" ]; then
-        echo -e "${RED}✗ Error: lambda/secrets-manager-config.json not found${NC}"
-        echo -e "${YELLOW}Please create lambda/secrets-manager-config.json with your Skyflow credentials${NC}"
-        echo -e "${YELLOW}See lambda/secrets-manager-config.example.json for format${NC}"
-        exit 1
-    fi
+        # Check if credentials.json exists
+        if [ ! -f "lambda/credentials.json" ]; then
+            echo -e "${RED}✗ Error: lambda/credentials.json not found${NC}"
+            echo -e "${YELLOW}Please create lambda/credentials.json with your Skyflow credentials${NC}"
+            exit 1
+        fi
 
-    # Check if secret exists and get its status
-    SECRET_INFO=$(aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$AWS_REGION" 2>/dev/null || echo "")
-    SECRET_DELETED=$(echo "$SECRET_INFO" | grep -i "DeletedDate" || echo "")
-
-    if [ -z "$SECRET_INFO" ] || [ -n "$SECRET_DELETED" ]; then
-        # Secret doesn't exist or is deleted - create new one
-        # If recently deleted, this might fail, so retry with delay
-        MAX_RETRIES=3
-        RETRY_COUNT=0
-
-        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            if aws secretsmanager create-secret \
-                --name "$SECRET_NAME" \
-                --description "Skyflow configuration for Snowflake tokenization Lambda" \
-                --secret-string file://lambda/secrets-manager-config.json \
-                --region "$AWS_REGION" > /dev/null 2>&1; then
-                echo -e "${GREEN}✓ Secret created: ${SECRET_NAME}${NC}"
-                break
-            else
-                RETRY_COUNT=$((RETRY_COUNT + 1))
-                if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-                    echo -e "${YELLOW}Secret creation failed (attempt $RETRY_COUNT/$MAX_RETRIES), retrying in 3s...${NC}"
-                    sleep 3
-                else
-                    echo -e "${RED}✗ Failed to create secret after $MAX_RETRIES attempts${NC}"
-                    exit 1
-                fi
-            fi
-        done
+        echo -e "${GREEN}✓ Found credentials.json${NC}"
+        echo ""
     else
-        # Secret exists and is not deleted - update it
-        aws secretsmanager put-secret-value \
-            --secret-id "$SECRET_NAME" \
-            --secret-string file://lambda/secrets-manager-config.json \
-            --region "$AWS_REGION" > /dev/null
-        echo -e "${GREEN}✓ Secret updated: ${SECRET_NAME}${NC}"
+        echo -e "${BLUE}[1/8]${NC} Creating/Updating AWS Secrets Manager secret..."
+
+        # Check if secrets-manager-config.json exists
+        if [ ! -f "lambda/secrets-manager-config.json" ]; then
+            echo -e "${RED}✗ Error: lambda/secrets-manager-config.json not found${NC}"
+            echo -e "${YELLOW}Please create lambda/secrets-manager-config.json with your Skyflow credentials${NC}"
+            echo -e "${YELLOW}See lambda/secrets-manager-config.example.json for format${NC}"
+            exit 1
+        fi
+
+        # Check if secret exists and get its status
+        SECRET_INFO=$(aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$AWS_REGION" 2>/dev/null || echo "")
+        SECRET_DELETED=$(echo "$SECRET_INFO" | grep -i "DeletedDate" || echo "")
+
+        if [ -z "$SECRET_INFO" ] || [ -n "$SECRET_DELETED" ]; then
+            # Secret doesn't exist or is deleted - create new one
+            # If recently deleted, this might fail, so retry with delay
+            MAX_RETRIES=3
+            RETRY_COUNT=0
+
+            while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+                if aws secretsmanager create-secret \
+                    --name "$SECRET_NAME" \
+                    --description "Skyflow configuration for Snowflake tokenization Lambda" \
+                    --secret-string file://lambda/secrets-manager-config.json \
+                    --region "$AWS_REGION" > /dev/null 2>&1; then
+                    echo -e "${GREEN}✓ Secret created: ${SECRET_NAME}${NC}"
+                    break
+                else
+                    RETRY_COUNT=$((RETRY_COUNT + 1))
+                    if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                        echo -e "${YELLOW}Secret creation failed (attempt $RETRY_COUNT/$MAX_RETRIES), retrying in 3s...${NC}"
+                        sleep 3
+                    else
+                        echo -e "${RED}✗ Failed to create secret after $MAX_RETRIES attempts${NC}"
+                        exit 1
+                    fi
+                fi
+            done
+        else
+            # Secret exists and is not deleted - update it
+            aws secretsmanager put-secret-value \
+                --secret-id "$SECRET_NAME" \
+                --secret-string file://lambda/secrets-manager-config.json \
+                --region "$AWS_REGION" > /dev/null
+            echo -e "${GREEN}✓ Secret updated: ${SECRET_NAME}${NC}"
+        fi
+        echo ""
     fi
-    echo ""
 
     # Step 2: Create Lambda execution role
     echo -e "${BLUE}[2/8]${NC} Creating Lambda execution role..."
@@ -259,8 +284,15 @@ EOF
     fi
 
     # Create deployment package with modular files
-    zip -r function.zip config.js skyflow-client.js handler.js package.json node_modules/ 2>/dev/null || \
-    zip -r function.zip config.js skyflow-client.js handler.js package.json
+    # Include credentials.json if it exists (for file-based config)
+    if [ -f credentials.json ]; then
+        echo "  Including credentials.json in package..."
+        zip -r function.zip config.js skyflow-client.js handler.js package.json credentials.json node_modules/ 2>/dev/null || \
+        zip -r function.zip config.js skyflow-client.js handler.js package.json credentials.json
+    else
+        zip -r function.zip config.js skyflow-client.js handler.js package.json node_modules/ 2>/dev/null || \
+        zip -r function.zip config.js skyflow-client.js handler.js package.json
+    fi
 
     echo -e "${GREEN}✓ Lambda package created: lambda/function.zip${NC}"
     echo ""
@@ -271,30 +303,56 @@ EOF
     FUNCTION_EXISTS=$(aws lambda get-function --function-name "$LAMBDA_FUNCTION_NAME" 2>/dev/null || echo "")
 
     if [ -z "$FUNCTION_EXISTS" ]; then
-        # Create new function with Secrets Manager environment variable
-        LAMBDA_ARN=$(aws lambda create-function \
-            --function-name "$LAMBDA_FUNCTION_NAME" \
-            --runtime nodejs20.x \
-            --role "$LAMBDA_ROLE_ARN" \
-            --handler handler.handler \
-            --zip-file fileb://function.zip \
-            --timeout 60 \
-            --memory-size 512 \
-            --description "Skyflow tokenization and detokenization for Snowflake" \
-            --environment "Variables={SECRETS_MANAGER_SECRET_NAME=${SECRET_NAME}}" \
-            --query 'FunctionArn' \
-            --output text)
+        # Create new function
+        if [ "$USE_CONFIG_FILE" = true ]; then
+            # No environment variables for file-based config
+            LAMBDA_ARN=$(aws lambda create-function \
+                --function-name "$LAMBDA_FUNCTION_NAME" \
+                --runtime nodejs20.x \
+                --role "$LAMBDA_ROLE_ARN" \
+                --handler handler.handler \
+                --zip-file fileb://function.zip \
+                --timeout 60 \
+                --memory-size 512 \
+                --description "Skyflow tokenization and detokenization for Snowflake (file-based config)" \
+                --query 'FunctionArn' \
+                --output text)
+        else
+            # With Secrets Manager environment variable
+            LAMBDA_ARN=$(aws lambda create-function \
+                --function-name "$LAMBDA_FUNCTION_NAME" \
+                --runtime nodejs20.x \
+                --role "$LAMBDA_ROLE_ARN" \
+                --handler handler.handler \
+                --zip-file fileb://function.zip \
+                --timeout 60 \
+                --memory-size 512 \
+                --description "Skyflow tokenization and detokenization for Snowflake" \
+                --environment "Variables={SECRETS_MANAGER_SECRET_NAME=${SECRET_NAME}}" \
+                --query 'FunctionArn' \
+                --output text)
+        fi
     else
         # Update existing function
         aws lambda update-function-code \
             --function-name "$LAMBDA_FUNCTION_NAME" \
             --zip-file fileb://function.zip > /dev/null
 
-        aws lambda update-function-configuration \
-            --function-name "$LAMBDA_FUNCTION_NAME" \
-            --timeout 60 \
-            --memory-size 512 \
-            --environment "Variables={SECRETS_MANAGER_SECRET_NAME=${SECRET_NAME}}" > /dev/null
+        if [ "$USE_CONFIG_FILE" = true ]; then
+            # Remove environment variables for file-based config
+            aws lambda update-function-configuration \
+                --function-name "$LAMBDA_FUNCTION_NAME" \
+                --timeout 60 \
+                --memory-size 512 \
+                --environment "Variables={}" > /dev/null
+        else
+            # Update with Secrets Manager environment variable
+            aws lambda update-function-configuration \
+                --function-name "$LAMBDA_FUNCTION_NAME" \
+                --timeout 60 \
+                --memory-size 512 \
+                --environment "Variables={SECRETS_MANAGER_SECRET_NAME=${SECRET_NAME}}" > /dev/null
+        fi
 
         LAMBDA_ARN=$(aws lambda get-function --function-name "$LAMBDA_FUNCTION_NAME" --query 'Configuration.FunctionArn' --output text)
     fi
@@ -1269,6 +1327,9 @@ case "${1}" in
     --deploy)
         deploy
         ;;
+    --deploy-config)
+        deploy --use-config-file
+        ;;
     --destroy)
         destroy
         ;;
@@ -1327,10 +1388,21 @@ case "${1}" in
         shift  # Remove --deploy-e2e from arguments
         setup_snowflake "$@"  # Pass any remaining arguments (like --database, --schema)
         ;;
-    *)
-        echo "Usage: $0 {--deploy|--destroy|--redeploy|--redeploy-e2e|--setup-permissions|--setup-snowflake|--test|--deploy-e2e}"
+    --deploy-e2e-config)
+        echo -e "${YELLOW}Running end-to-end deployment (file-based config)...${NC}"
         echo ""
-        echo "  --deploy                             Deploy Lambda and API Gateway to AWS"
+        deploy --use-config-file
+        echo ""
+        echo -e "${YELLOW}Proceeding to Snowflake setup...${NC}"
+        echo ""
+        shift  # Remove --deploy-e2e-config from arguments
+        setup_snowflake "$@"  # Pass any remaining arguments (like --database, --schema)
+        ;;
+    *)
+        echo "Usage: $0 {--deploy|--deploy-config|--destroy|--redeploy|--redeploy-e2e|--setup-permissions|--setup-snowflake|--test|--deploy-e2e|--deploy-e2e-config}"
+        echo ""
+        echo "  --deploy                             Deploy Lambda and API Gateway to AWS (with Secrets Manager)"
+        echo "  --deploy-config                      Deploy Lambda with file-based config (credentials.json, no Secrets Manager)"
         echo "  --destroy                            Destroy all AWS resources"
         echo "  --redeploy                           Destroy, redeploy AWS, and test"
         echo "  --redeploy-e2e [options]             Destroy, redeploy AWS, setup Snowflake, and test"
@@ -1341,18 +1413,33 @@ case "${1}" in
         echo "      --database <name>                   Override database from config.json"
         echo "      --schema <name>                     Override schema from config.json"
         echo "  --test                               Test Snowflake integration"
-        echo "  --deploy-e2e [options]               Deploy AWS + Snowflake setup (automated)"
+        echo "  --deploy-e2e [options]               Deploy AWS + Snowflake setup (Secrets Manager)"
+        echo "      --database <name>                   Override database from config.json"
+        echo "      --schema <name>                     Override schema from config.json"
+        echo "  --deploy-e2e-config [options]        Deploy AWS + Snowflake setup (file-based config)"
         echo "      --database <name>                   Override database from config.json"
         echo "      --schema <name>                     Override schema from config.json"
         echo ""
-        echo "Complete workflow:"
+        echo "Complete workflow (Secrets Manager):"
         echo "  1. $0 --setup-permissions your-iam-username"
         echo "  2. $0 --deploy-e2e                       # Deploy AWS + Snowflake in one command"
         echo "  3. $0 --test"
         echo ""
+        echo "Complete workflow (file-based config):"
+        echo "  1. $0 --setup-permissions your-iam-username"
+        echo "  2. $0 --deploy-e2e-config                # Deploy AWS + Snowflake with credentials.json"
+        echo "  3. $0 --test"
+        echo ""
         echo "Or step-by-step:"
+        echo "  # With Secrets Manager"
         echo "  1. $0 --setup-permissions your-iam-username"
         echo "  2. $0 --deploy"
+        echo "  3. $0 --setup-snowflake"
+        echo "  4. $0 --test"
+        echo ""
+        echo "  # With file-based config"
+        echo "  1. $0 --setup-permissions your-iam-username"
+        echo "  2. $0 --deploy-config"
         echo "  3. $0 --setup-snowflake"
         echo "  4. $0 --test"
         echo ""
@@ -1363,13 +1450,19 @@ case "${1}" in
         echo "  $0 --redeploy-e2e"
         echo ""
         echo "Examples:"
-        echo "  # Use config.json database/schema"
+        echo "  # Secrets Manager with config.json database/schema"
         echo "  $0 --deploy-e2e"
         echo "  $0 --redeploy-e2e"
         echo ""
-        echo "  # Override database and schema"
+        echo "  # File-based config with config.json database/schema"
+        echo "  $0 --deploy-e2e-config"
+        echo ""
+        echo "  # Override database and schema (Secrets Manager)"
         echo "  $0 --deploy-e2e --database MY_DB --schema MY_SCHEMA"
         echo "  $0 --redeploy-e2e --database MY_DB --schema MY_SCHEMA"
+        echo ""
+        echo "  # Override database and schema (file-based config)"
+        echo "  $0 --deploy-e2e-config --database MY_DB --schema MY_SCHEMA"
         exit 1
         ;;
 esac

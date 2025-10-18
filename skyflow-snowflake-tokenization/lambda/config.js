@@ -21,6 +21,20 @@ async function loadConfig() {
         return await loadFromSecretsManager();
     }
 
+    // Try loading from local credentials.json file
+    try {
+        console.log('Loading from local credentials.json file');
+        const fs = require('fs');
+        const path = require('path');
+        const credentialsPath = path.join(__dirname, 'credentials.json');
+        const fileContent = fs.readFileSync(credentialsPath, 'utf8');
+        const config = JSON.parse(fileContent);
+        console.log('Successfully loaded credentials.json');
+        return normalizeConfig(config);
+    } catch (error) {
+        console.log('Failed to load credentials.json:', error.message);
+    }
+
     // Fallback to environment variables
     console.log('Loading from environment variables');
     return loadFromEnvironment();
