@@ -218,10 +218,10 @@ class SkyflowClient {
 
             console.log(`Tokenizing ${values.length} values for ${dataType} (vault: ${vaultId}, table: ${table})`);
 
-            // Use SDK's insert with upsert
+            // Use SDK's insert with upsert and tokenization
             const insertRequest = new InsertRequest(table, insertData);
             const insertOptions = new InsertOptions();
-            insertOptions.setTokenization(true);
+            insertOptions.setReturnTokens(true); // Return tokens in response
             insertOptions.setUpsertColumn(column); // Upsert on column
             insertOptions.setContinueOnError(true); // Continue on individual errors
 
@@ -230,6 +230,7 @@ class SkyflowClient {
             const elapsed = Date.now() - startTime;
 
             console.log(`SDK insert completed in ${elapsed}ms for ${dataType}`);
+            console.log('SDK Response:', JSON.stringify(response, null, 2));
 
             // Parse SDK response
             return this._parseInsertResponse(values, response, column);
@@ -335,9 +336,12 @@ class SkyflowClient {
     _parseInsertResponse(values, response, column) {
         const results = [];
 
-        // SDK response format: { insertedFields: [{skyflowId, tokens: {column: token}}], errors: [...] }
+        // SDK response format: { insertedFields: [{skyflowId, column_name: token_value}], errors: [...] }
+        // The token is returned as the field value itself, not in a nested 'tokens' object
         const insertedFields = response.insertedFields || [];
         const errors = response.errors || [];
+
+        console.log(`Parsing insert response: ${insertedFields.length} insertedFields, ${errors.length} errors`);
 
         for (let i = 0; i < values.length; i++) {
             const item = values[i];
@@ -345,6 +349,7 @@ class SkyflowClient {
             // Check if this index has an error
             const errorForIndex = errors.find(e => e.index === i);
             if (errorForIndex) {
+                console.log(`Error at index ${i}:`, errorForIndex);
                 results.push({
                     rowIndex: item.rowIndex,
                     token: null,
@@ -354,14 +359,18 @@ class SkyflowClient {
             }
 
             // Get token from insertedFields
+            // The token is the field value itself (e.g., insertedFields[i][column])
             const inserted = insertedFields[i];
-            if (inserted && inserted.tokens && inserted.tokens[column]) {
+            console.log(`Index ${i} inserted:`, JSON.stringify(inserted));
+
+            if (inserted && inserted[column]) {
                 results.push({
                     rowIndex: item.rowIndex,
-                    token: inserted.tokens[column],
+                    token: inserted[column],  // Token is the field value directly
                     error: null
                 });
             } else {
+                console.log(`No token found at index ${i}. Column: ${column}, inserted:`, inserted);
                 results.push({
                     rowIndex: item.rowIndex,
                     token: null,
