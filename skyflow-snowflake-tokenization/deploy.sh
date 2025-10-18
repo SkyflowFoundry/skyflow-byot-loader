@@ -284,12 +284,18 @@ EOF
     fi
 
     # Create deployment package with modular files
-    # Include credentials.json if it exists (for file-based config)
-    if [ -f credentials.json ]; then
-        echo "  Including credentials.json in package..."
-        zip -r function.zip config.js skyflow-client.js handler.js package.json credentials.json node_modules/ 2>/dev/null || \
-        zip -r function.zip config.js skyflow-client.js handler.js package.json credentials.json
+    # Include credentials.json ONLY if using file-based config
+    if [ "$USE_CONFIG_FILE" = true ]; then
+        if [ -f credentials.json ]; then
+            echo "  Including credentials.json in package (file-based config mode)..."
+            zip -r function.zip config.js skyflow-client.js handler.js package.json credentials.json node_modules/ 2>/dev/null || \
+            zip -r function.zip config.js skyflow-client.js handler.js package.json credentials.json
+        else
+            echo -e "${RED}✗ Error: credentials.json not found but required for file-based config${NC}"
+            exit 1
+        fi
     else
+        echo "  Excluding credentials.json (using Secrets Manager)..."
         zip -r function.zip config.js skyflow-client.js handler.js package.json node_modules/ 2>/dev/null || \
         zip -r function.zip config.js skyflow-client.js handler.js package.json
     fi

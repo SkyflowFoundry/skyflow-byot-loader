@@ -15,13 +15,14 @@ const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client
 async function loadConfig() {
     console.log('Loading configuration...');
 
-    // Try Secrets Manager first
+    // Try Secrets Manager first (if configured, this is the ONLY source)
     if (process.env.SECRETS_MANAGER_SECRET_NAME) {
         console.log('Loading from AWS Secrets Manager:', process.env.SECRETS_MANAGER_SECRET_NAME);
+        console.log('IMPORTANT: Secrets Manager is configured - ignoring credentials.json and environment variables');
         return await loadFromSecretsManager();
     }
 
-    // Try loading from local credentials.json file
+    // Try loading from local credentials.json file (only if Secrets Manager NOT configured)
     try {
         console.log('Loading from local credentials.json file');
         const fs = require('fs');
