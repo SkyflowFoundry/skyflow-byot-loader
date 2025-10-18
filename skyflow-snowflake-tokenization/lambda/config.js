@@ -215,11 +215,21 @@ function normalizeConfig(config) {
         throw new Error('batchSize must be a positive number');
     }
 
+    // Validate max concurrency
+    if (!config.maxConcurrency) {
+        throw new Error('Missing maxConcurrency in configuration');
+    }
+
+    if (typeof config.maxConcurrency !== 'number' || config.maxConcurrency < 1) {
+        throw new Error('maxConcurrency must be a positive number');
+    }
+
     console.log('Configuration validated successfully', {
         vaultCount: config.vaults.length,
         dataTypes: Object.keys(config.vaultsByDataType),
         logLevel: config.logLevel,
-        batchSize: config.batchSize
+        batchSize: config.batchSize,
+        maxConcurrency: config.maxConcurrency
     });
 
     return config;
@@ -283,7 +293,8 @@ function convertOldToNewFormat(oldConfig) {
         credentials,
         vaults,
         logLevel: oldConfig.logLevel || 'INFO',
-        batchSize: oldConfig.batch_size || oldConfig.batchSize || 100
+        batchSize: oldConfig.batch_size || oldConfig.batchSize || 100,
+        maxConcurrency: oldConfig.max_concurrency || oldConfig.maxConcurrency || 20
     };
 
     console.log('Old config converted successfully', {

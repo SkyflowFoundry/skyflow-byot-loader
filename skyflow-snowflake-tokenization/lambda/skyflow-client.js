@@ -22,8 +22,9 @@ class SkyflowClient {
         this.config = config;
         this.vaultsByDataType = config.vaultsByDataType;
 
-        // Batch size from configuration
+        // Batch size and concurrency from configuration
         this.MAX_BATCH_SIZE = config.batchSize;
+        this.MAX_CONCURRENCY = config.maxConcurrency;
 
         // Map log level string to SDK enum
         const logLevelMap = {
@@ -73,7 +74,9 @@ class SkyflowClient {
         console.log('SkyflowClient initialized with SDK', {
             vaultCount: config.vaults.length,
             dataTypes: Object.keys(this.vaultsByDataType),
-            logLevel: config.logLevel
+            logLevel: config.logLevel,
+            batchSize: this.MAX_BATCH_SIZE,
+            maxConcurrency: this.MAX_CONCURRENCY
         });
     }
 
@@ -97,17 +100,20 @@ class SkyflowClient {
             groupedByDataType[dataType].push(item);
         }
 
-        console.log(`Tokenizing ${values.length} values across ${Object.keys(groupedByDataType).length} data types`);
+        const dataTypeCount = Object.keys(groupedByDataType).length;
+        console.log(`Tokenizing ${values.length} values across ${dataTypeCount} data types`);
 
-        // Process each data type group
-        const allResults = [];
-        for (const [dataType, groupValues] of Object.entries(groupedByDataType)) {
-            const results = await this._tokenizeDataTypeGroup(dataType, groupValues);
-            allResults.push(...results);
+        // Process each data type group IN PARALLEL
+        const allResultsPromises = Object.entries(groupedByDataType).map(([dataType, groupValues]) =>
+            this._tokenizeDataTypeGroup(dataType, groupValues)
+        );
+        const allResultsArrays = await Promise.all(allResultsPromises);
+        const allResults = allResultsArrays.flat();
+
+        // Sort results by rowIndex to maintain order (only if multiple data types)
+        if (dataTypeCount > 1) {
+            allResults.sort((a, b) => a.rowIndex - b.rowIndex);
         }
-
-        // Sort results by rowIndex to maintain order
-        allResults.sort((a, b) => a.rowIndex - b.rowIndex);
 
         console.log(`Tokenization complete: ${allResults.length} results`);
         return allResults;
@@ -133,17 +139,20 @@ class SkyflowClient {
             groupedByDataType[dataType].push(item);
         }
 
-        console.log(`Detokenizing ${tokens.length} tokens across ${Object.keys(groupedByDataType).length} data types`);
+        const dataTypeCount = Object.keys(groupedByDataType).length;
+        console.log(`Detokenizing ${tokens.length} tokens across ${dataTypeCount} data types`);
 
-        // Process each data type group
-        const allResults = [];
-        for (const [dataType, groupTokens] of Object.entries(groupedByDataType)) {
-            const results = await this._detokenizeDataTypeGroup(dataType, groupTokens);
-            allResults.push(...results);
+        // Process each data type group IN PARALLEL
+        const allResultsPromises = Object.entries(groupedByDataType).map(([dataType, groupTokens]) =>
+            this._detokenizeDataTypeGroup(dataType, groupTokens)
+        );
+        const allResultsArrays = await Promise.all(allResultsPromises);
+        const allResults = allResultsArrays.flat();
+
+        // Sort results by rowIndex (only if multiple data types)
+        if (dataTypeCount > 1) {
+            allResults.sort((a, b) => a.rowIndex - b.rowIndex);
         }
-
-        // Sort results by rowIndex
-        allResults.sort((a, b) => a.rowIndex - b.rowIndex);
 
         console.log(`Detokenization complete: ${allResults.length} results`);
         return allResults;
@@ -170,12 +179,24 @@ class SkyflowClient {
         // Split into batches if needed
         if (values.length > this.MAX_BATCH_SIZE) {
             console.log(`Splitting ${values.length} values into batches of ${this.MAX_BATCH_SIZE} for ${dataType}`);
-            const allResults = [];
 
+            // Create batches
+            const batches = [];
             for (let i = 0; i < values.length; i += this.MAX_BATCH_SIZE) {
-                const batch = values.slice(i, i + this.MAX_BATCH_SIZE);
-                const batchResults = await this._tokenizeBatch(dataType, batch, client, vaultId, table, column);
-                allResults.push(...batchResults);
+                batches.push(values.slice(i, i + this.MAX_BATCH_SIZE));
+            }
+
+            console.log(`Processing ${batches.length} batches with max concurrency of ${this.MAX_CONCURRENCY}`);
+
+            // Process batches in parallel with concurrency control
+            const allResults = [];
+            for (let i = 0; i < batches.length; i += this.MAX_CONCURRENCY) {
+                const batchGroup = batches.slice(i, i + this.MAX_CONCURRENCY);
+                const groupPromises = batchGroup.map(batch =>
+                    this._tokenizeBatch(dataType, batch, client, vaultId, table, column)
+                );
+                const groupResults = await Promise.all(groupPromises);
+                allResults.push(...groupResults.flat());
             }
 
             return allResults;
@@ -244,12 +265,24 @@ class SkyflowClient {
         // Split into batches if needed
         if (tokens.length > this.MAX_BATCH_SIZE) {
             console.log(`Splitting ${tokens.length} tokens into batches of ${this.MAX_BATCH_SIZE} for ${dataType}`);
-            const allResults = [];
 
+            // Create batches
+            const batches = [];
             for (let i = 0; i < tokens.length; i += this.MAX_BATCH_SIZE) {
-                const batch = tokens.slice(i, i + this.MAX_BATCH_SIZE);
-                const batchResults = await this._detokenizeBatch(dataType, batch, client, vaultId);
-                allResults.push(...batchResults);
+                batches.push(tokens.slice(i, i + this.MAX_BATCH_SIZE));
+            }
+
+            console.log(`Processing ${batches.length} batches with max concurrency of ${this.MAX_CONCURRENCY}`);
+
+            // Process batches in parallel with concurrency control
+            const allResults = [];
+            for (let i = 0; i < batches.length; i += this.MAX_CONCURRENCY) {
+                const batchGroup = batches.slice(i, i + this.MAX_CONCURRENCY);
+                const groupPromises = batchGroup.map(batch =>
+                    this._detokenizeBatch(dataType, batch, client, vaultId)
+                );
+                const groupResults = await Promise.all(groupPromises);
+                allResults.push(...groupResults.flat());
             }
 
             return allResults;
