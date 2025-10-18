@@ -206,30 +206,50 @@ function normalizeConfig(config) {
         config.logLevel = 'INFO';
     }
 
-    // Validate batch size
-    if (!config.batchSize) {
-        throw new Error('Missing batchSize in configuration');
+    // Validate tokenize batch size
+    if (!config.tokenizeBatchSize) {
+        throw new Error('Missing tokenizeBatchSize in configuration');
+    }
+    if (typeof config.tokenizeBatchSize !== 'number' || config.tokenizeBatchSize < 1) {
+        throw new Error('tokenizeBatchSize must be a positive number');
     }
 
-    if (typeof config.batchSize !== 'number' || config.batchSize < 1) {
-        throw new Error('batchSize must be a positive number');
+    // Validate tokenize max concurrency
+    if (!config.tokenizeMaxConcurrency) {
+        throw new Error('Missing tokenizeMaxConcurrency in configuration');
+    }
+    if (typeof config.tokenizeMaxConcurrency !== 'number' || config.tokenizeMaxConcurrency < 1) {
+        throw new Error('tokenizeMaxConcurrency must be a positive number');
     }
 
-    // Validate max concurrency
-    if (!config.maxConcurrency) {
-        throw new Error('Missing maxConcurrency in configuration');
+    // Validate detokenize batch size
+    if (!config.detokenizeBatchSize) {
+        throw new Error('Missing detokenizeBatchSize in configuration');
+    }
+    if (typeof config.detokenizeBatchSize !== 'number' || config.detokenizeBatchSize < 1) {
+        throw new Error('detokenizeBatchSize must be a positive number');
     }
 
-    if (typeof config.maxConcurrency !== 'number' || config.maxConcurrency < 1) {
-        throw new Error('maxConcurrency must be a positive number');
+    // Validate detokenize max concurrency
+    if (!config.detokenizeMaxConcurrency) {
+        throw new Error('Missing detokenizeMaxConcurrency in configuration');
+    }
+    if (typeof config.detokenizeMaxConcurrency !== 'number' || config.detokenizeMaxConcurrency < 1) {
+        throw new Error('detokenizeMaxConcurrency must be a positive number');
     }
 
     console.log('Configuration validated successfully', {
         vaultCount: config.vaults.length,
         dataTypes: Object.keys(config.vaultsByDataType),
         logLevel: config.logLevel,
-        batchSize: config.batchSize,
-        maxConcurrency: config.maxConcurrency
+        tokenize: {
+            batchSize: config.tokenizeBatchSize,
+            maxConcurrency: config.tokenizeMaxConcurrency
+        },
+        detokenize: {
+            batchSize: config.detokenizeBatchSize,
+            maxConcurrency: config.detokenizeMaxConcurrency
+        }
     });
 
     return config;
@@ -293,8 +313,14 @@ function convertOldToNewFormat(oldConfig) {
         credentials,
         vaults,
         logLevel: oldConfig.logLevel || 'INFO',
+        // Legacy single values (fallback)
         batchSize: oldConfig.batch_size || oldConfig.batchSize || 100,
-        maxConcurrency: oldConfig.max_concurrency || oldConfig.maxConcurrency || 20
+        maxConcurrency: oldConfig.max_concurrency || oldConfig.maxConcurrency || 20,
+        // Separate tokenize/detokenize values (preferred)
+        tokenizeBatchSize: oldConfig.tokenize_batch_size || oldConfig.tokenizeBatchSize || oldConfig.batchSize || 100,
+        tokenizeMaxConcurrency: oldConfig.tokenize_max_concurrency || oldConfig.tokenizeMaxConcurrency || oldConfig.maxConcurrency || 20,
+        detokenizeBatchSize: oldConfig.detokenize_batch_size || oldConfig.detokenizeBatchSize || oldConfig.batchSize || 100,
+        detokenizeMaxConcurrency: oldConfig.detokenize_max_concurrency || oldConfig.detokenizeMaxConcurrency || oldConfig.maxConcurrency || 20
     };
 
     console.log('Old config converted successfully', {

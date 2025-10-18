@@ -22,9 +22,11 @@ class SkyflowClient {
         this.config = config;
         this.vaultsByDataType = config.vaultsByDataType;
 
-        // Batch size and concurrency from configuration
-        this.MAX_BATCH_SIZE = config.batchSize;
-        this.MAX_CONCURRENCY = config.maxConcurrency;
+        // Separate batch size and concurrency for tokenize vs detokenize
+        this.TOKENIZE_BATCH_SIZE = config.tokenizeBatchSize;
+        this.TOKENIZE_MAX_CONCURRENCY = config.tokenizeMaxConcurrency;
+        this.DETOKENIZE_BATCH_SIZE = config.detokenizeBatchSize;
+        this.DETOKENIZE_MAX_CONCURRENCY = config.detokenizeMaxConcurrency;
 
         // Map log level string to SDK enum
         const logLevelMap = {
@@ -75,8 +77,14 @@ class SkyflowClient {
             vaultCount: config.vaults.length,
             dataTypes: Object.keys(this.vaultsByDataType),
             logLevel: config.logLevel,
-            batchSize: this.MAX_BATCH_SIZE,
-            maxConcurrency: this.MAX_CONCURRENCY
+            tokenize: {
+                batchSize: this.TOKENIZE_BATCH_SIZE,
+                maxConcurrency: this.TOKENIZE_MAX_CONCURRENCY
+            },
+            detokenize: {
+                batchSize: this.DETOKENIZE_BATCH_SIZE,
+                maxConcurrency: this.DETOKENIZE_MAX_CONCURRENCY
+            }
         });
     }
 
@@ -100,20 +108,16 @@ class SkyflowClient {
             groupedByDataType[dataType].push(item);
         }
 
-        const dataTypeCount = Object.keys(groupedByDataType).length;
-        console.log(`Tokenizing ${values.length} values across ${dataTypeCount} data types`);
+        console.log(`Tokenizing ${values.length} values across ${Object.keys(groupedByDataType).length} data types`);
 
-        // Process each data type group IN PARALLEL
-        const allResultsPromises = Object.entries(groupedByDataType).map(([dataType, groupValues]) =>
-            this._tokenizeDataTypeGroup(dataType, groupValues)
-        );
-        const allResultsArrays = await Promise.all(allResultsPromises);
-        const allResults = allResultsArrays.flat();
-
-        // Sort results by rowIndex to maintain order (only if multiple data types)
-        if (dataTypeCount > 1) {
-            allResults.sort((a, b) => a.rowIndex - b.rowIndex);
+        // Process each data type group SEQUENTIALLY (with parallelization within each)
+        const allResults = [];
+        for (const [dataType, groupValues] of Object.entries(groupedByDataType)) {
+            const results = await this._tokenizeDataTypeGroup(dataType, groupValues);
+            allResults.push(...results);
         }
+
+        // No need to sort - results are already in order from sequential processing
 
         console.log(`Tokenization complete: ${allResults.length} results`);
         return allResults;
@@ -139,20 +143,16 @@ class SkyflowClient {
             groupedByDataType[dataType].push(item);
         }
 
-        const dataTypeCount = Object.keys(groupedByDataType).length;
-        console.log(`Detokenizing ${tokens.length} tokens across ${dataTypeCount} data types`);
+        console.log(`Detokenizing ${tokens.length} tokens across ${Object.keys(groupedByDataType).length} data types`);
 
-        // Process each data type group IN PARALLEL
-        const allResultsPromises = Object.entries(groupedByDataType).map(([dataType, groupTokens]) =>
-            this._detokenizeDataTypeGroup(dataType, groupTokens)
-        );
-        const allResultsArrays = await Promise.all(allResultsPromises);
-        const allResults = allResultsArrays.flat();
-
-        // Sort results by rowIndex (only if multiple data types)
-        if (dataTypeCount > 1) {
-            allResults.sort((a, b) => a.rowIndex - b.rowIndex);
+        // Process each data type group SEQUENTIALLY (with parallelization within each)
+        const allResults = [];
+        for (const [dataType, groupTokens] of Object.entries(groupedByDataType)) {
+            const results = await this._detokenizeDataTypeGroup(dataType, groupTokens);
+            allResults.push(...results);
         }
+
+        // No need to sort - results are already in order from sequential processing
 
         console.log(`Detokenization complete: ${allResults.length} results`);
         return allResults;
@@ -177,21 +177,21 @@ class SkyflowClient {
         const { table, column, vaultId } = vault;
 
         // Split into batches if needed
-        if (values.length > this.MAX_BATCH_SIZE) {
-            console.log(`Splitting ${values.length} values into batches of ${this.MAX_BATCH_SIZE} for ${dataType}`);
+        if (values.length > this.TOKENIZE_BATCH_SIZE) {
+            console.log(`Splitting ${values.length} values into batches of ${this.TOKENIZE_BATCH_SIZE} for ${dataType}`);
 
             // Create batches
             const batches = [];
-            for (let i = 0; i < values.length; i += this.MAX_BATCH_SIZE) {
-                batches.push(values.slice(i, i + this.MAX_BATCH_SIZE));
+            for (let i = 0; i < values.length; i += this.TOKENIZE_BATCH_SIZE) {
+                batches.push(values.slice(i, i + this.TOKENIZE_BATCH_SIZE));
             }
 
-            console.log(`Processing ${batches.length} batches with max concurrency of ${this.MAX_CONCURRENCY}`);
+            console.log(`Processing ${batches.length} batches with max concurrency of ${this.TOKENIZE_MAX_CONCURRENCY}`);
 
             // Process batches in parallel with concurrency control
             const allResults = [];
-            for (let i = 0; i < batches.length; i += this.MAX_CONCURRENCY) {
-                const batchGroup = batches.slice(i, i + this.MAX_CONCURRENCY);
+            for (let i = 0; i < batches.length; i += this.TOKENIZE_MAX_CONCURRENCY) {
+                const batchGroup = batches.slice(i, i + this.TOKENIZE_MAX_CONCURRENCY);
                 const groupPromises = batchGroup.map(batch =>
                     this._tokenizeBatch(dataType, batch, client, vaultId, table, column)
                 );
@@ -263,21 +263,21 @@ class SkyflowClient {
         const { vaultId } = vault;
 
         // Split into batches if needed
-        if (tokens.length > this.MAX_BATCH_SIZE) {
-            console.log(`Splitting ${tokens.length} tokens into batches of ${this.MAX_BATCH_SIZE} for ${dataType}`);
+        if (tokens.length > this.DETOKENIZE_BATCH_SIZE) {
+            console.log(`Splitting ${tokens.length} tokens into batches of ${this.DETOKENIZE_BATCH_SIZE} for ${dataType}`);
 
             // Create batches
             const batches = [];
-            for (let i = 0; i < tokens.length; i += this.MAX_BATCH_SIZE) {
-                batches.push(tokens.slice(i, i + this.MAX_BATCH_SIZE));
+            for (let i = 0; i < tokens.length; i += this.DETOKENIZE_BATCH_SIZE) {
+                batches.push(tokens.slice(i, i + this.DETOKENIZE_BATCH_SIZE));
             }
 
-            console.log(`Processing ${batches.length} batches with max concurrency of ${this.MAX_CONCURRENCY}`);
+            console.log(`Processing ${batches.length} batches with max concurrency of ${this.DETOKENIZE_MAX_CONCURRENCY}`);
 
             // Process batches in parallel with concurrency control
             const allResults = [];
-            for (let i = 0; i < batches.length; i += this.MAX_CONCURRENCY) {
-                const batchGroup = batches.slice(i, i + this.MAX_CONCURRENCY);
+            for (let i = 0; i < batches.length; i += this.DETOKENIZE_MAX_CONCURRENCY) {
+                const batchGroup = batches.slice(i, i + this.DETOKENIZE_MAX_CONCURRENCY);
                 const groupPromises = batchGroup.map(batch =>
                     this._detokenizeBatch(dataType, batch, client, vaultId)
                 );
