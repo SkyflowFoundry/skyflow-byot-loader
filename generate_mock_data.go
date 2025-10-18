@@ -230,6 +230,31 @@ func loadSnowflakeConfig(configPath string) (*SnowflakeConfig, error) {
 	}, nil
 }
 
+// parseTableName parses a table name that may be fully-qualified (DATABASE.SCHEMA.TABLE)
+// or just a simple table name. Returns (database, schema, table, error)
+// If database/schema are missing, they are returned as empty strings
+func parseTableName(tableName string) (string, string, string, error) {
+	if tableName == "" {
+		return "", "", "", nil
+	}
+
+	parts := strings.Split(tableName, ".")
+
+	switch len(parts) {
+	case 1:
+		// Just table name: TABLE
+		return "", "", parts[0], nil
+	case 2:
+		// Schema and table: SCHEMA.TABLE
+		return "", parts[0], parts[1], nil
+	case 3:
+		// Fully qualified: DATABASE.SCHEMA.TABLE
+		return parts[0], parts[1], parts[2], nil
+	default:
+		return "", "", "", fmt.Errorf("invalid table name format: %s (expected TABLE, SCHEMA.TABLE, or DATABASE.SCHEMA.TABLE)", tableName)
+	}
+}
+
 // ==================== CSV OUTPUT WRITER ====================
 
 type CSVOutputWriter struct {
@@ -1212,8 +1237,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "        union: Creates CLM/MBR tables with separate name fields\n\n")
 		fmt.Fprintf(os.Stderr, "  -sf-table string\n")
 		fmt.Fprintf(os.Stderr, "        Snowflake table name (optional)\n")
+		fmt.Fprintf(os.Stderr, "        Formats: TABLE, SCHEMA.TABLE, or DATABASE.SCHEMA.TABLE\n")
 		fmt.Fprintf(os.Stderr, "        Default: \"PATIENTS\" for simple mode, \"CLM\" for union mode\n")
-		fmt.Fprintf(os.Stderr, "        For union mode: automatically creates both CLM and MBR tables\n\n")
+		fmt.Fprintf(os.Stderr, "        For union mode: automatically creates both CLM and MBR tables\n")
+		fmt.Fprintf(os.Stderr, "        If DATABASE/SCHEMA provided, overrides config.json values\n\n")
 		fmt.Fprintf(os.Stderr, "  -sf-batch-size int\n")
 		fmt.Fprintf(os.Stderr, "        Snowflake insert batch size (default: 10000)\n")
 		fmt.Fprintf(os.Stderr, "        Number of records to insert in a single batch\n\n")
@@ -1229,6 +1256,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  %s -count 10000000 -output snowflake -sf-query-mode union\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  # Generate to custom Snowflake table with truncation\n")
 		fmt.Fprintf(os.Stderr, "  %s -count 1000000 -output snowflake -sf-table PATIENTS_TEST -truncate\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  # Generate to fully-qualified table (different database/schema)\n")
+		fmt.Fprintf(os.Stderr, "  %s -count 1000000 -output snowflake -sf-table MYDB.MYSCHEMA.PATIENTS_TEST -truncate\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  # Generate CSV files in custom directory\n")
 		fmt.Fprintf(os.Stderr, "  %s -count 500000 -output csv -data-dir ./test_data\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "OUTPUT:\n")
@@ -1275,8 +1304,12 @@ func main() {
 	fmt.Println("=" + strings.Repeat("=", 79))
 	fmt.Printf("\n")
 
-	// Generate timestamp for this run (nanosecond precision for uniqueness across runs)
-	timestamp := fmt.Sprintf("%d", time.Now().UnixNano())
+	// Generate timestamp for this run (second precision for uniqueness across runs)
+	timestampSec := time.Now().Unix()
+	timestamp := fmt.Sprintf("%d", timestampSec)
+
+	// Use timestamp as base ID to prevent overlap across multiple runs
+	baseID := timestampSec
 
 	// Setup output writer based on type
 	var writer OutputWriter
@@ -1290,6 +1323,7 @@ func main() {
 			os.Exit(1)
 		}
 
+		// Parse table name (may be fully qualified: DATABASE.SCHEMA.TABLE)
 		tableName := *sfTable
 		if tableName == "" {
 			if *sfQueryMode == "union" {
@@ -1299,21 +1333,36 @@ func main() {
 			}
 		}
 
-		writer = NewSnowflakeOutputWriter(config, tableName, *sfBatchSize, *sfQueryMode)
+		// Parse the table name for database/schema overrides
+		dbOverride, schemaOverride, tableOnly, err := parseTableName(tableName)
+		if err != nil {
+			fmt.Printf("❌ Failed to parse table name: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Override database/schema if provided in table name
+		if dbOverride != "" {
+			config.Database = dbOverride
+		}
+		if schemaOverride != "" {
+			config.Schema = schemaOverride
+		}
+
+		writer = NewSnowflakeOutputWriter(config, tableOnly, *sfBatchSize, *sfQueryMode)
 		vaultTypes = []string{} // Not needed for Snowflake unified table
 
 		fmt.Printf("📊 Output: Snowflake\n")
 		fmt.Printf("   Query mode: %s\n", *sfQueryMode)
 		if *sfQueryMode == "union" {
-			tableNameMBR := strings.Replace(tableName, "CLM", "MBR", 1)
-			if tableNameMBR == tableName {
-				tableNameMBR = tableName + "_MBR"
+			tableNameMBR := strings.Replace(tableOnly, "CLM", "MBR", 1)
+			if tableNameMBR == tableOnly {
+				tableNameMBR = tableOnly + "_MBR"
 			}
 			fmt.Printf("   Tables: %s.%s.%s & %s.%s.%s\n",
-				config.Database, config.Schema, tableName,
+				config.Database, config.Schema, tableOnly,
 				config.Database, config.Schema, tableNameMBR)
 		} else {
-			fmt.Printf("   Table: %s.%s.%s\n", config.Database, config.Schema, tableName)
+			fmt.Printf("   Table: %s.%s.%s\n", config.Database, config.Schema, tableOnly)
 		}
 		fmt.Printf("   Records: %s\n", formatNumber(*count))
 		fmt.Printf("   Batch size: %s\n\n", formatNumber(*sfBatchSize))
@@ -1369,14 +1418,16 @@ func main() {
 			workerRecords += remainder
 		}
 
-		startRecordID := int64(w) * int64(recordsPerWorker)
+		// Calculate starting record ID for this worker based on timestamp + worker offset
+		// This ensures no overlap between runs (timestamp) and between workers (offset)
+		workerStartID := baseID + int64(w)*int64(recordsPerWorker)
 
-		go func(workerID int, numRecs int, baseRecordID int64, queryMode string) {
+		go func(workerID int, numRecs int, workerBaseID int64, queryMode string) {
 			defer wg.Done()
 			localRand := rand.New(rand.NewSource(time.Now().UnixNano() + int64(workerID*1000000)))
 
 			for i := 0; i < numRecs; i++ {
-				recordID := baseRecordID + int64(i)
+				recordID := workerBaseID + int64(i)
 
 				var record VaultRecord
 				if *outputType == "snowflake" {
@@ -1410,7 +1461,7 @@ func main() {
 					os.Stdout.Sync() // Force flush to show progress immediately
 				}
 			}
-		}(w, workerRecords, startRecordID, *sfQueryMode)
+		}(w, workerRecords, workerStartID, *sfQueryMode)
 	}
 
 	wg.Wait()

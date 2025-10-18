@@ -1,0 +1,25 @@
+{
+  "skyflow": {
+    "vault_url": "https://YOUR_VAULT_ID.vault.skyflowapis.com",
+    "bearer_token": "YOUR_BEARER_TOKEN_HERE",
+    "vaults": {
+      "default": "YOUR_DEFAULT_VAULT_ID",
+      "ssn": "YOUR_SSN_VAULT_ID",
+      "name": "YOUR_NAME_VAULT_ID",
+      "dob": "YOUR_DOB_VAULT_ID"
+    }
+  },
+  "aws": {
+    "region": "us-east-1",
+    "lambda_function_name": "skyflow-detokenize",
+    "lambda_memory": 512,
+    "lambda_timeout": 60,
+    "api_gateway_name": "skyflow-detokenize-api"
+  },
+  "performance": {
+    "batch_size": 200,
+    "max_concurrency": 10,
+    "max_retries": 3,
+    "retry_delay_ms": 500
+  }
+}

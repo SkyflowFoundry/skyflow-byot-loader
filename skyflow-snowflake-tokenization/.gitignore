@@ -1,0 +1,53 @@
+# Temporary Snowflake setup files
+.snowflake-*.sql
+.snowflake-*.json
+
+# AWS deployment artifacts
+deployment-info.txt
+lambda/function.zip
+lambda/node_modules/
+*.zip
+
+# Build and distribution artifacts
+build/
+dist/
+*.tar.gz
+
+# Logs
+*.log
+npm-debug.log*
+*.pdf
+
+# Environment and configuration
+config.json
+secrets-manager-config.json
+.snowflake-create-function.sql
+.env
+.env.local
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Backup files
+*.bak
+*.backup
+*.tmp
+
+# PDF documentation (generated)
+*.pdf
+
+# Test output
+response.json
+test-output.json

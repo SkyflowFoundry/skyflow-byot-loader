@@ -936,6 +936,7 @@ func createBYOTPayload(records []Record, vaultConfig VaultConfig, config *Config
 
 // Send batch to Skyflow (optimized with shared HTTP client)
 func sendBatch(client *http.Client, config *Config, vaultConfig VaultConfig, apiURL string, batch []Record, batchNum int, metrics *Metrics) error {
+
 	// Base delay
 	if config.BaseRequestDelay > 0 {
 		delayStart := time.Now()
@@ -969,6 +970,8 @@ func sendBatch(client *http.Client, config *Config, vaultConfig VaultConfig, api
 		apiStart := time.Now()
 		resp, err := client.Do(req)
 		apiDuration := time.Since(apiStart)
+		if resp != nil {
+		}
 
 		atomic.AddInt64(&metrics.ActiveRequests, -1)
 		metrics.AddTime("api_call", apiDuration)
