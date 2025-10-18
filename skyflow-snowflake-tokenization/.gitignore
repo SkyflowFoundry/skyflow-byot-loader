@@ -20,6 +20,7 @@ npm-debug.log*
 
 # Environment and configuration
 config.json
+credentials.json
 secrets-manager-config.json
 .snowflake-create-function.sql
 .env
