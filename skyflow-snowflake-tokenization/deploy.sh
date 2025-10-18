@@ -25,6 +25,7 @@ LAMBDA_FUNCTION_NAME="${PROJECT_NAME}"
 API_NAME="${PROJECT_NAME}-api"
 IAM_ROLE_NAME="SnowflakeAPIRole"
 LAMBDA_ROLE_NAME="${PROJECT_NAME}-lambda-role"
+SECRET_NAME="${PROJECT_NAME}-config"
 
 # Load configuration
 CONFIG_FILE="../config.json"
@@ -132,8 +133,58 @@ deploy() {
     echo -e "${YELLOW}Starting deployment...${NC}"
     echo ""
 
-    # Step 1: Create Lambda execution role
-    echo -e "${BLUE}[1/7]${NC} Creating Lambda execution role..."
+    # Step 1: Create/Update AWS Secrets Manager secret
+    echo -e "${BLUE}[1/8]${NC} Creating/Updating AWS Secrets Manager secret..."
+
+    # Check if secrets-manager-config.json exists
+    if [ ! -f "lambda/secrets-manager-config.json" ]; then
+        echo -e "${RED}✗ Error: lambda/secrets-manager-config.json not found${NC}"
+        echo -e "${YELLOW}Please create lambda/secrets-manager-config.json with your Skyflow credentials${NC}"
+        echo -e "${YELLOW}See lambda/secrets-manager-config.example.json for format${NC}"
+        exit 1
+    fi
+
+    # Check if secret exists and get its status
+    SECRET_INFO=$(aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$AWS_REGION" 2>/dev/null || echo "")
+    SECRET_DELETED=$(echo "$SECRET_INFO" | grep -i "DeletedDate" || echo "")
+
+    if [ -z "$SECRET_INFO" ] || [ -n "$SECRET_DELETED" ]; then
+        # Secret doesn't exist or is deleted - create new one
+        # If recently deleted, this might fail, so retry with delay
+        MAX_RETRIES=3
+        RETRY_COUNT=0
+
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if aws secretsmanager create-secret \
+                --name "$SECRET_NAME" \
+                --description "Skyflow configuration for Snowflake tokenization Lambda" \
+                --secret-string file://lambda/secrets-manager-config.json \
+                --region "$AWS_REGION" > /dev/null 2>&1; then
+                echo -e "${GREEN}✓ Secret created: ${SECRET_NAME}${NC}"
+                break
+            else
+                RETRY_COUNT=$((RETRY_COUNT + 1))
+                if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                    echo -e "${YELLOW}Secret creation failed (attempt $RETRY_COUNT/$MAX_RETRIES), retrying in 3s...${NC}"
+                    sleep 3
+                else
+                    echo -e "${RED}✗ Failed to create secret after $MAX_RETRIES attempts${NC}"
+                    exit 1
+                fi
+            fi
+        done
+    else
+        # Secret exists and is not deleted - update it
+        aws secretsmanager put-secret-value \
+            --secret-id "$SECRET_NAME" \
+            --secret-string file://lambda/secrets-manager-config.json \
+            --region "$AWS_REGION" > /dev/null
+        echo -e "${GREEN}✓ Secret updated: ${SECRET_NAME}${NC}"
+    fi
+    echo ""
+
+    # Step 2: Create Lambda execution role
+    echo -e "${BLUE}[2/8]${NC} Creating Lambda execution role..."
 
     LAMBDA_ROLE_ARN=$(aws iam get-role --role-name "$LAMBDA_ROLE_NAME" --query 'Role.Arn' --output text 2>/dev/null || echo "")
 
@@ -197,8 +248,8 @@ EOF
     echo -e "${GREEN}✓ Lambda role ready: ${LAMBDA_ROLE_ARN}${NC}"
     echo ""
 
-    # Step 2: Package Lambda function
-    echo -e "${BLUE}[2/7]${NC} Packaging Lambda function..."
+    # Step 3: Package Lambda function
+    echo -e "${BLUE}[3/8]${NC} Packaging Lambda function..."
 
     cd lambda
 
@@ -214,13 +265,13 @@ EOF
     echo -e "${GREEN}✓ Lambda package created: lambda/function.zip${NC}"
     echo ""
 
-    # Step 3: Create or update Lambda function
-    echo -e "${BLUE}[3/7]${NC} Deploying Lambda function..."
+    # Step 4: Create or update Lambda function
+    echo -e "${BLUE}[4/8]${NC} Deploying Lambda function..."
 
     FUNCTION_EXISTS=$(aws lambda get-function --function-name "$LAMBDA_FUNCTION_NAME" 2>/dev/null || echo "")
 
     if [ -z "$FUNCTION_EXISTS" ]; then
-        # Create new function (will use Secrets Manager for configuration)
+        # Create new function with Secrets Manager environment variable
         LAMBDA_ARN=$(aws lambda create-function \
             --function-name "$LAMBDA_FUNCTION_NAME" \
             --runtime nodejs20.x \
@@ -230,6 +281,7 @@ EOF
             --timeout 60 \
             --memory-size 512 \
             --description "Skyflow tokenization and detokenization for Snowflake" \
+            --environment "Variables={SECRETS_MANAGER_SECRET_NAME=${SECRET_NAME}}" \
             --query 'FunctionArn' \
             --output text)
     else
@@ -241,7 +293,8 @@ EOF
         aws lambda update-function-configuration \
             --function-name "$LAMBDA_FUNCTION_NAME" \
             --timeout 60 \
-            --memory-size 512 > /dev/null
+            --memory-size 512 \
+            --environment "Variables={SECRETS_MANAGER_SECRET_NAME=${SECRET_NAME}}" > /dev/null
 
         LAMBDA_ARN=$(aws lambda get-function --function-name "$LAMBDA_FUNCTION_NAME" --query 'Configuration.FunctionArn' --output text)
     fi
@@ -251,8 +304,8 @@ EOF
     echo -e "${GREEN}✓ Lambda function deployed: ${LAMBDA_ARN}${NC}"
     echo ""
 
-    # Step 4: Create API Gateway REST API
-    echo -e "${BLUE}[4/7]${NC} Creating API Gateway..."
+    # Step 5: Create API Gateway REST API
+    echo -e "${BLUE}[5/8]${NC} Creating API Gateway..."
 
     # Check if API already exists
     API_ID=$(aws apigateway get-rest-apis --query "items[?name=='${API_NAME}'].id" --output text)
@@ -269,8 +322,8 @@ EOF
     echo -e "${GREEN}✓ API Gateway created: ${API_ID}${NC}"
     echo ""
 
-    # Step 5: Configure API Gateway
-    echo -e "${BLUE}[5/7]${NC} Configuring API Gateway resources..."
+    # Step 6: Configure API Gateway
+    echo -e "${BLUE}[6/8]${NC} Configuring API Gateway resources..."
 
     # Get root resource ID
     ROOT_RESOURCE_ID=$(aws apigateway get-resources --rest-api-id "$API_ID" --query 'items[?path==`/`].id' --output text)
@@ -400,8 +453,8 @@ EOF
     echo -e "${GREEN}✓ API Gateway configured (with tokenize and detokenize data-type paths)${NC}"
     echo ""
 
-    # Step 6: Grant API Gateway permission to invoke Lambda
-    echo -e "${BLUE}[6/7]${NC} Granting API Gateway permissions..."
+    # Step 7: Grant API Gateway permission to invoke Lambda
+    echo -e "${BLUE}[7/8]${NC} Granting API Gateway permissions..."
 
     aws lambda add-permission \
         --function-name "$LAMBDA_FUNCTION_NAME" \
@@ -413,8 +466,8 @@ EOF
     echo -e "${GREEN}✓ Permissions granted${NC}"
     echo ""
 
-    # Step 7: Deploy API
-    echo -e "${BLUE}[7/7]${NC} Deploying API to prod stage..."
+    # Step 8: Deploy API
+    echo -e "${BLUE}[8/8]${NC} Deploying API to prod stage..."
 
     aws apigateway create-deployment \
         --rest-api-id "$API_ID" \
@@ -572,6 +625,7 @@ destroy() {
     echo -e "  - Lambda function: ${LAMBDA_FUNCTION_NAME}"
     echo -e "  - API Gateway: ${API_NAME}"
     echo -e "  - IAM roles: ${LAMBDA_ROLE_NAME}, ${IAM_ROLE_NAME}"
+    echo -e "  - AWS Secrets Manager secret: ${SECRET_NAME}"
     echo -e "  - Snowflake: API integration and external functions (if configured)"
     echo ""
     read -p "Are you sure? (yes/no): " -r
@@ -588,14 +642,23 @@ destroy() {
         CLEANUP_SNOWFLAKE=true
     fi
 
+    # Delete AWS Secrets Manager secret
+    echo -e "${BLUE}[1/5]${NC} Deleting AWS Secrets Manager secret..."
+    aws secretsmanager delete-secret \
+        --secret-id "$SECRET_NAME" \
+        --force-delete-without-recovery \
+        --region "$AWS_REGION" 2>/dev/null || echo "  (not found)"
+    echo -e "${GREEN}✓ Secret deleted (or scheduled for deletion)${NC}"
+    echo ""
+
     # Delete Lambda function
-    echo -e "${BLUE}[1/4]${NC} Deleting Lambda function..."
+    echo -e "${BLUE}[2/5]${NC} Deleting Lambda function..."
     aws lambda delete-function --function-name "$LAMBDA_FUNCTION_NAME" 2>/dev/null || echo "  (not found)"
     echo -e "${GREEN}✓ Lambda function deleted${NC}"
     echo ""
 
     # Delete API Gateway
-    echo -e "${BLUE}[2/4]${NC} Deleting API Gateway..."
+    echo -e "${BLUE}[3/5]${NC} Deleting API Gateway..."
     API_ID=$(aws apigateway get-rest-apis --query "items[?name=='${API_NAME}'].id" --output text)
     if [ -n "$API_ID" ]; then
         aws apigateway delete-rest-api --rest-api-id "$API_ID"
@@ -604,7 +667,7 @@ destroy() {
     echo ""
 
     # Delete IAM roles
-    echo -e "${BLUE}[3/4]${NC} Deleting IAM roles..."
+    echo -e "${BLUE}[4/5]${NC} Deleting IAM roles..."
 
     # Delete Lambda role
     aws iam detach-role-policy --role-name "$LAMBDA_ROLE_NAME" --policy-arn "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole" 2>/dev/null || true
@@ -620,7 +683,7 @@ destroy() {
 
     # Clean up Snowflake resources
     if [ "$CLEANUP_SNOWFLAKE" = true ]; then
-        echo -e "${BLUE}[4/5]${NC} Cleaning up Snowflake resources..."
+        echo -e "${BLUE}[5/6]${NC} Cleaning up Snowflake resources..."
 
         SF_PASSWORD=$(jq -r '.snowflake.password' "$CONFIG_FILE")
         SF_ACCOUNT=$(jq -r '.snowflake.account' "$CONFIG_FILE")
@@ -712,7 +775,7 @@ EOF
     fi
 
     # Clean up local files
-    echo -e "${BLUE}[5/5]${NC} Cleaning up local files..."
+    echo -e "${BLUE}[6/6]${NC} Cleaning up local files..."
     rm -rf lambda/node_modules lambda/function.zip
     rm -f /tmp/lambda-trust-policy.json /tmp/snowflake-trust-policy.json /tmp/api-invoke-policy.json
     rm -f /tmp/snowflake-cleanup.sql

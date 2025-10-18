@@ -1,123 +1,10 @@
 /**
- * Skyflow Client with Performance Optimizations
+ * Skyflow SDK Client Wrapper
  *
- * Features:
- * - HTTP/2 support with connection multiplexing
- * - Adaptive retry with jitter and Retry-After header support
- * - Buffer pooling for reduced allocations
- * - Optimized connection pool configuration
- * - Automatic batching and parallel processing
+ * Handles tokenization and detokenization using official Skyflow Node.js SDK v2.0.0
  */
 
-const http2 = require('http2');
-const { URL } = require('url');
-
-/**
- * Buffer Pool for reusing buffers across requests
- */
-class BufferPool {
-    constructor(initialSize = 4096) {
-        this.pool = [];
-        this.initialSize = initialSize;
-        this.hits = 0;
-        this.misses = 0;
-    }
-
-    /**
-     * Get a buffer from the pool
-     * @returns {Buffer}
-     */
-    get() {
-        if (this.pool.length > 0) {
-            this.hits++;
-            return this.pool.pop();
-        }
-        this.misses++;
-        return Buffer.allocUnsafe(this.initialSize);
-    }
-
-    /**
-     * Return a buffer to the pool
-     * @param {Buffer} buffer
-     */
-    put(buffer) {
-        if (this.pool.length < 50) { // Max 50 pooled buffers
-            this.pool.push(buffer);
-        }
-    }
-
-    /**
-     * Get pool statistics
-     * @returns {Object}
-     */
-    stats() {
-        return {
-            size: this.pool.length,
-            hits: this.hits,
-            misses: this.misses,
-            hitRate: this.hits / (this.hits + this.misses) || 0
-        };
-    }
-}
-
-/**
- * HTTP/2 Session Manager
- */
-class HTTP2SessionManager {
-    constructor() {
-        this.sessions = new Map();
-    }
-
-    /**
-     * Get or create an HTTP/2 session for a hostname
-     * @param {string} hostname
-     * @returns {Object} HTTP/2 session
-     */
-    getSession(hostname) {
-        const url = `https://${hostname}`;
-
-        if (this.sessions.has(hostname)) {
-            const session = this.sessions.get(hostname);
-            if (!session.destroyed && !session.closed) {
-                return session;
-            }
-            this.sessions.delete(hostname);
-        }
-
-        // Create new HTTP/2 session
-        const session = http2.connect(url, {
-            maxSessionMemory: 100, // MB
-            settings: {
-                enablePush: false,
-                maxConcurrentStreams: 100
-            }
-        });
-
-        session.on('error', (err) => {
-            console.error(`HTTP/2 session error for ${hostname}:`, err.message);
-            this.sessions.delete(hostname);
-        });
-
-        session.on('close', () => {
-            this.sessions.delete(hostname);
-        });
-
-        this.sessions.set(hostname, session);
-        return session;
-    }
-
-    /**
-     * Close all sessions
-     */
-    destroy() {
-        for (const session of this.sessions.values()) {
-            if (!session.destroyed) {
-                session.close();
-            }
-        }
-        this.sessions.clear();
-    }
-}
+const { Skyflow, LogLevel, RedactionType, InsertRequest, InsertOptions, DetokenizeRequest, DetokenizeOptions } = require('skyflow-node');
 
 /**
  * Skyflow Client for tokenization and detokenization
@@ -125,41 +12,74 @@ class HTTP2SessionManager {
 class SkyflowClient {
     /**
      * @param {Object} config - Configuration
-     * @param {string} config.vaultUrl - Skyflow vault URL
-     * @param {string} config.bearerToken - Skyflow bearer token
-     * @param {number} [config.batchSize=100] - Batch size
-     * @param {number} [config.maxConcurrency=20] - Max concurrent requests
-     * @param {number} [config.maxRetries=3] - Max retry attempts
-     * @param {number} [config.retryDelay=1.0] - Initial retry delay in seconds
+     * @param {Object} config.credentials - Skyflow credentials
+     * @param {string} config.credentials.apiKey - API key (bearer token)
+     * @param {Array} config.vaults - Array of vault configurations
+     * @param {Object} config.vaultsByDataType - Vault lookup by data type
+     * @param {string} config.logLevel - Log level (INFO, ERROR, WARN, DEBUG)
      */
     constructor(config) {
-        this.vaultUrl = config.vaultUrl;
-        this.bearerToken = config.bearerToken;
-        this.batchSize = Math.min(config.batchSize || 100, 200); // Max 200
-        this.maxConcurrency = config.maxConcurrency || 20;
-        this.maxRetries = config.maxRetries || 3;
-        this.retryDelay = config.retryDelay || 1.0;
+        this.config = config;
+        this.vaultsByDataType = config.vaultsByDataType;
 
-        // HTTP/2 session manager
-        this.sessionManager = new HTTP2SessionManager();
+        // Batch size from configuration
+        this.MAX_BATCH_SIZE = config.batchSize;
 
-        // Buffer pool for reduced allocations
-        this.bufferPool = new BufferPool(4096);
+        // Map log level string to SDK enum
+        const logLevelMap = {
+            'ERROR': LogLevel.ERROR,
+            'WARN': LogLevel.WARN,
+            'INFO': LogLevel.INFO,
+            'DEBUG': LogLevel.DEBUG
+        };
 
-        console.log('SkyflowClient initialized with optimizations', {
-            vaultUrl: this.vaultUrl,
-            batchSize: this.batchSize,
-            maxConcurrency: this.maxConcurrency,
-            maxRetries: this.maxRetries,
-            http2: true,
-            bufferPooling: true
+        // Initialize SDK clients for each vault
+        this.skyflowClients = {};
+
+        for (const vault of config.vaults) {
+            // SDK expects credentials wrapped in specific format
+            // For service account: { credentialsString: JSON.stringify(serviceAccountObject) }
+            // For API key: { apiKey: 'key' }
+            let credentials;
+            if (config.credentials.apiKey) {
+                // API key format
+                credentials = { apiKey: config.credentials.apiKey };
+            } else {
+                // Service account format - SDK needs credentialsString
+                credentials = { credentialsString: JSON.stringify(config.credentials) };
+            }
+
+            const vaultConfig = {
+                vaultId: vault.vaultId,
+                clusterId: vault.clusterId,
+                env: 'PROD',
+                credentials: credentials
+            };
+
+            const skyflowConfig = {
+                vaultConfigs: [vaultConfig],
+                logLevel: logLevelMap[config.logLevel] || LogLevel.INFO
+            };
+
+            console.log(`Initializing Skyflow SDK for ${vault.dataType}`, {
+                vaultId: vault.vaultId,
+                clusterId: vault.clusterId,
+                credentialType: config.credentials.apiKey ? 'API Key' : 'Service Account'
+            });
+
+            this.skyflowClients[vault.dataType] = new Skyflow(skyflowConfig);
+        }
+
+        console.log('SkyflowClient initialized with SDK', {
+            vaultCount: config.vaults.length,
+            dataTypes: Object.keys(this.vaultsByDataType),
+            logLevel: config.logLevel
         });
     }
 
     /**
-     * Tokenize a batch of values with parallel processing
-     *
-     * @param {Array} values - Array of {rowIndex, value, vaultId, table, column}
+     * Tokenize a batch of values
+     * @param {Array} values - Array of {rowIndex, value, vaultId, table, column, dataType}
      * @returns {Promise<Array>} Array of {rowIndex, token, error}
      */
     async tokenizeBatch(values) {
@@ -167,45 +87,35 @@ class SkyflowClient {
             return [];
         }
 
-        // Split values into batches
-        const batches = [];
-        for (let i = 0; i < values.length; i += this.batchSize) {
-            batches.push(values.slice(i, i + this.batchSize));
+        // Group by data type (each data type may use different vault)
+        const groupedByDataType = {};
+        for (const item of values) {
+            const dataType = item.dataType;
+            if (!groupedByDataType[dataType]) {
+                groupedByDataType[dataType] = [];
+            }
+            groupedByDataType[dataType].push(item);
         }
 
-        console.log(`Processing ${values.length} values in ${batches.length} batches (max ${this.maxConcurrency} concurrent)`);
+        console.log(`Tokenizing ${values.length} values across ${Object.keys(groupedByDataType).length} data types`);
 
-        // Process batches in parallel with concurrency limit
+        // Process each data type group
         const allResults = [];
-        for (let i = 0; i < batches.length; i += this.maxConcurrency) {
-            const batchGroup = batches.slice(i, i + this.maxConcurrency);
-            console.log(`Processing batch group ${Math.floor(i / this.maxConcurrency) + 1}: ${batchGroup.length} parallel requests`);
-
-            const groupPromises = batchGroup.map((batch, idx) => {
-                const batchNum = i + idx + 1;
-                console.log(`  Batch ${batchNum}/${batches.length}: ${batch.length} values`);
-                return this._tokenizeBatchWithRetry(batch);
-            });
-
-            const groupResults = await Promise.all(groupPromises);
-            allResults.push(...groupResults);
+        for (const [dataType, groupValues] of Object.entries(groupedByDataType)) {
+            const results = await this._tokenizeDataTypeGroup(dataType, groupValues);
+            allResults.push(...results);
         }
 
-        const results = allResults.flat();
-        console.log(`Completed tokenization: ${results.length} results`);
+        // Sort results by rowIndex to maintain order
+        allResults.sort((a, b) => a.rowIndex - b.rowIndex);
 
-        // Log buffer pool stats periodically
-        if (Math.random() < 0.1) { // 10% of requests
-            console.log('Buffer pool stats:', this.bufferPool.stats());
-        }
-
-        return results;
+        console.log(`Tokenization complete: ${allResults.length} results`);
+        return allResults;
     }
 
     /**
-     * Detokenize a batch of tokens with parallel processing
-     *
-     * @param {Array} tokens - Array of {rowIndex, token, vaultId}
+     * Detokenize a batch of tokens
+     * @param {Array} tokens - Array of {rowIndex, token, vaultId, dataType}
      * @returns {Promise<Array>} Array of {rowIndex, value, error}
      */
     async detokenizeBatch(tokens) {
@@ -213,463 +123,273 @@ class SkyflowClient {
             return [];
         }
 
-        // Split tokens into batches
-        const batches = [];
-        for (let i = 0; i < tokens.length; i += this.batchSize) {
-            batches.push(tokens.slice(i, i + this.batchSize));
+        // Group by data type
+        const groupedByDataType = {};
+        for (const item of tokens) {
+            const dataType = item.dataType;
+            if (!groupedByDataType[dataType]) {
+                groupedByDataType[dataType] = [];
+            }
+            groupedByDataType[dataType].push(item);
         }
 
-        console.log(`Processing ${tokens.length} tokens in ${batches.length} batches (max ${this.maxConcurrency} concurrent)`);
+        console.log(`Detokenizing ${tokens.length} tokens across ${Object.keys(groupedByDataType).length} data types`);
 
-        // Process batches in parallel with concurrency limit
+        // Process each data type group
         const allResults = [];
-        for (let i = 0; i < batches.length; i += this.maxConcurrency) {
-            const batchGroup = batches.slice(i, i + this.maxConcurrency);
-            console.log(`Processing batch group ${Math.floor(i / this.maxConcurrency) + 1}: ${batchGroup.length} parallel requests`);
-
-            const groupPromises = batchGroup.map((batch, idx) => {
-                const batchNum = i + idx + 1;
-                console.log(`  Batch ${batchNum}/${batches.length}: ${batch.length} tokens`);
-                return this._detokenizeBatchWithRetry(batch);
-            });
-
-            const groupResults = await Promise.all(groupPromises);
-            allResults.push(...groupResults);
+        for (const [dataType, groupTokens] of Object.entries(groupedByDataType)) {
+            const results = await this._detokenizeDataTypeGroup(dataType, groupTokens);
+            allResults.push(...results);
         }
 
-        const results = allResults.flat();
-        console.log(`Completed detokenization: ${results.length} results`);
+        // Sort results by rowIndex
+        allResults.sort((a, b) => a.rowIndex - b.rowIndex);
 
-        return results;
+        console.log(`Detokenization complete: ${allResults.length} results`);
+        return allResults;
     }
 
     /**
-     * Tokenize a single batch with adaptive retry logic
-     *
-     * @param {Array} batch - Batch of values
-     * @returns {Promise<Array>} Results
+     * Tokenize a group of values for a specific data type
      * @private
      */
-    async _tokenizeBatchWithRetry(batch) {
-        let lastError = null;
+    async _tokenizeDataTypeGroup(dataType, values) {
+        const vault = this.vaultsByDataType[dataType];
+        if (!vault) {
+            console.error(`No vault configured for data type: ${dataType}`);
+            return values.map(v => ({
+                rowIndex: v.rowIndex,
+                token: null,
+                error: `No vault configured for data type: ${dataType}`
+            }));
+        }
 
-        for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-            try {
-                if (attempt > 0) {
-                    const delay = this._calculateBackoff(attempt, lastError);
-                    console.log(`Retry attempt ${attempt}/${this.maxRetries} after ${delay}ms`);
-                    await this._sleep(delay);
-                }
+        const client = this.skyflowClients[dataType];
+        const { table, column, vaultId } = vault;
 
-                return await this._tokenizeBatchOnce(batch);
+        // Split into batches if needed
+        if (values.length > this.MAX_BATCH_SIZE) {
+            console.log(`Splitting ${values.length} values into batches of ${this.MAX_BATCH_SIZE} for ${dataType}`);
+            const allResults = [];
 
-            } catch (error) {
-                lastError = error;
-                console.error(`Attempt ${attempt + 1} failed:`, error.message);
-
-                // Check if we should retry
-                if (!this._shouldRetry(error)) {
-                    console.log('Non-retryable error detected, not retrying');
-                    break;
-                }
+            for (let i = 0; i < values.length; i += this.MAX_BATCH_SIZE) {
+                const batch = values.slice(i, i + this.MAX_BATCH_SIZE);
+                const batchResults = await this._tokenizeBatch(dataType, batch, client, vaultId, table, column);
+                allResults.push(...batchResults);
             }
+
+            return allResults;
         }
 
-        // All retries failed
-        console.error('All retry attempts exhausted', { error: lastError.message });
-        return batch.map(item => ({
-            rowIndex: item.rowIndex,
-            token: null,
-            error: lastError.message
-        }));
+        return await this._tokenizeBatch(dataType, values, client, vaultId, table, column);
     }
 
     /**
-     * Detokenize a single batch with adaptive retry logic
-     *
-     * @param {Array} batch - Batch of tokens
-     * @returns {Promise<Array>} Results
+     * Tokenize a single batch (internal helper)
      * @private
      */
-    async _detokenizeBatchWithRetry(batch) {
-        let lastError = null;
-
-        for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-            try {
-                if (attempt > 0) {
-                    const delay = this._calculateBackoff(attempt, lastError);
-                    console.log(`Retry attempt ${attempt}/${this.maxRetries} after ${delay}ms`);
-                    await this._sleep(delay);
-                }
-
-                return await this._detokenizeBatchOnce(batch);
-
-            } catch (error) {
-                lastError = error;
-                console.error(`Attempt ${attempt + 1} failed:`, error.message);
-
-                // Check if we should retry
-                if (!this._shouldRetry(error)) {
-                    console.log('Non-retryable error detected, not retrying');
-                    break;
-                }
-            }
-        }
-
-        // All retries failed
-        console.error('All retry attempts exhausted', { error: lastError.message });
-        return batch.map(item => ({
-            rowIndex: item.rowIndex,
-            value: null,
-            error: lastError.message
-        }));
-    }
-
-    /**
-     * Calculate backoff delay with jitter and Retry-After support
-     *
-     * @param {number} attempt - Attempt number
-     * @param {Error} lastError - Last error
-     * @returns {number} Delay in milliseconds
-     * @private
-     */
-    _calculateBackoff(attempt, lastError) {
-        // Base exponential backoff: delay * 2^(attempt-1)
-        let baseDelay = this.retryDelay * Math.pow(2, attempt - 1) * 1000;
-
-        // Special handling for rate limiting (429)
-        if (lastError && lastError.statusCode === 429) {
-            // Check for Retry-After header
-            if (lastError.retryAfter) {
-                console.log(`Using Retry-After header: ${lastError.retryAfter}s`);
-                return lastError.retryAfter * 1000;
-            }
-            // Use longer backoff for rate limiting
-            baseDelay *= 2;
-        }
-
-        // Add jitter: random value between 0.5x and 1.5x base delay
-        // This prevents thundering herd problem
-        const jitter = 0.5 + Math.random(); // Random between 0.5 and 1.5
-        let delay = baseDelay * jitter;
-
-        // Cap at 30 seconds
-        if (delay > 30000) {
-            delay = 30000;
-        }
-
-        return Math.floor(delay);
-    }
-
-    /**
-     * Determine if an error should be retried
-     *
-     * @param {Error} error - Error to check
-     * @returns {boolean} True if should retry
-     * @private
-     */
-    _shouldRetry(error) {
-        if (!error.statusCode) {
-            // Network errors, timeouts, and other non-HTTP errors are retryable
-            return true;
-        }
-
-        // Retry 429 (rate limit) and 408 (timeout)
-        if (error.statusCode === 429 || error.statusCode === 408) {
-            return true;
-        }
-
-        // Don't retry other 4xx client errors
-        if (error.statusCode >= 400 && error.statusCode < 500) {
-            return false;
-        }
-
-        // Retry 5xx server errors
-        return error.statusCode >= 500;
-    }
-
-    /**
-     * Tokenize a single batch (one API call)
-     *
-     * @param {Array} batch - Batch of values
-     * @returns {Promise<Array>} Results
-     * @private
-     */
-    async _tokenizeBatchOnce(batch) {
-        // All items in a batch must have the same vaultId, table, and column
-        const vaultId = batch[0].vaultId;
-        const table = batch[0].table;
-        const column = batch[0].column;
-
-        if (!vaultId) {
-            throw new Error('No vault_id configured for data type');
-        }
-        if (!table) {
-            throw new Error('No table specified for tokenization');
-        }
-        if (!column) {
-            throw new Error('No column specified for tokenization');
-        }
-
-        // Build request payload
-        const records = batch.map(item => ({
-            fields: {
+    async _tokenizeBatch(dataType, values, client, vaultId, table, column) {
+        try {
+            // Prepare insert data for SDK
+            const insertData = values.map(item => ({
                 [column]: item.value
+            }));
+
+            console.log(`Tokenizing ${values.length} values for ${dataType} (vault: ${vaultId}, table: ${table})`);
+
+            // Use SDK's insert with upsert
+            const insertRequest = new InsertRequest(table, insertData);
+            const insertOptions = new InsertOptions();
+            insertOptions.setTokenization(true);
+            insertOptions.setUpsertColumn(column); // Upsert on column
+            insertOptions.setContinueOnError(true); // Continue on individual errors
+
+            const startTime = Date.now();
+            const response = await client.vault(vaultId).insert(insertRequest, insertOptions);
+            const elapsed = Date.now() - startTime;
+
+            console.log(`SDK insert completed in ${elapsed}ms for ${dataType}`);
+
+            // Parse SDK response
+            return this._parseInsertResponse(values, response, column);
+
+        } catch (error) {
+            console.error(`Tokenization failed for ${dataType}:`, error.message);
+            return values.map(v => ({
+                rowIndex: v.rowIndex,
+                token: null,
+                error: error.message
+            }));
+        }
+    }
+
+    /**
+     * Detokenize a group of tokens for a specific data type
+     * @private
+     */
+    async _detokenizeDataTypeGroup(dataType, tokens) {
+        const vault = this.vaultsByDataType[dataType];
+        if (!vault) {
+            console.error(`No vault configured for data type: ${dataType}`);
+            return tokens.map(t => ({
+                rowIndex: t.rowIndex,
+                value: null,
+                error: `No vault configured for data type: ${dataType}`
+            }));
+        }
+
+        const client = this.skyflowClients[dataType];
+        const { vaultId } = vault;
+
+        // Split into batches if needed
+        if (tokens.length > this.MAX_BATCH_SIZE) {
+            console.log(`Splitting ${tokens.length} tokens into batches of ${this.MAX_BATCH_SIZE} for ${dataType}`);
+            const allResults = [];
+
+            for (let i = 0; i < tokens.length; i += this.MAX_BATCH_SIZE) {
+                const batch = tokens.slice(i, i + this.MAX_BATCH_SIZE);
+                const batchResults = await this._detokenizeBatch(dataType, batch, client, vaultId);
+                allResults.push(...batchResults);
             }
-        }));
 
-        const payload = {
-            records,
-            tokenization: true,
-            upsert: column
-        };
-
-        // Make API request
-        const url = `${this.vaultUrl}/v1/vaults/${vaultId}/${table}`;
-        console.log(`POST ${url}`, { valueCount: batch.length, upsert: true });
-
-        const responseData = await this._makeRequest(url, payload);
-
-        // Parse response
-        return this._parseTokenizeResponse(batch, responseData, column);
-    }
-
-    /**
-     * Detokenize a single batch (one API call)
-     *
-     * @param {Array} batch - Batch of tokens
-     * @returns {Promise<Array>} Results
-     * @private
-     */
-    async _detokenizeBatchOnce(batch) {
-        const vaultId = batch[0].vaultId;
-        if (!vaultId) {
-            throw new Error('No vault_id configured for data type');
+            return allResults;
         }
 
-        // Build request payload
-        const detokenizationParameters = batch.map(item => ({
-            token: item.token,
-            redaction: 'PLAIN_TEXT'
-        }));
-
-        const payload = {
-            detokenizationParameters
-        };
-
-        // Make API request
-        const url = `${this.vaultUrl}/v1/vaults/${vaultId}/detokenize`;
-        console.log(`POST ${url}`, { tokenCount: batch.length });
-
-        const responseData = await this._makeRequest(url, payload);
-
-        // Parse response
-        return this._parseDetokenizeResponse(batch, responseData);
+        return await this._detokenizeBatch(dataType, tokens, client, vaultId);
     }
 
     /**
-     * Make HTTP/2 request to Skyflow API with buffer pooling
-     *
-     * @param {string} url - API URL
-     * @param {Object} payload - Request payload
-     * @returns {Promise<Object>} Response data
+     * Detokenize a single batch (internal helper)
      * @private
      */
-    _makeRequest(url, payload) {
-        return new Promise((resolve, reject) => {
-            const urlObj = new URL(url);
+    async _detokenizeBatch(dataType, tokens, client, vaultId) {
+        try {
+            console.log(`Detokenizing ${tokens.length} tokens for ${dataType} (vault: ${vaultId})`);
 
-            // Get HTTP/2 session
-            const session = this.sessionManager.getSession(urlObj.hostname);
+            // Prepare detokenize request for SDK
+            const detokenizeData = tokens.map(item => ({
+                token: item.token,
+                redactionType: RedactionType.PLAIN_TEXT
+            }));
 
-            // Serialize payload to JSON
-            const postData = JSON.stringify(payload);
+            const detokenizeRequest = new DetokenizeRequest(detokenizeData);
+            const detokenizeOptions = new DetokenizeOptions();
+            detokenizeOptions.setContinueOnError(true);
 
-            const headers = {
-                ':method': 'POST',
-                ':path': urlObj.pathname,
-                'authorization': `Bearer ${this.bearerToken}`,
-                'content-type': 'application/json',
-                'content-length': Buffer.byteLength(postData)
-            };
+            const startTime = Date.now();
+            const response = await client.vault(vaultId).detokenize(detokenizeRequest, detokenizeOptions);
+            const elapsed = Date.now() - startTime;
 
-            // Make HTTP/2 request
-            const req = session.request(headers);
+            console.log(`SDK detokenize completed in ${elapsed}ms for ${dataType}`);
 
-            let responseData = '';
-            let responseHeaders = {};
+            // Parse SDK response
+            return this._parseDetokenizeResponse(tokens, response);
 
-            req.on('response', (headers) => {
-                responseHeaders = headers;
-            });
-
-            req.on('data', (chunk) => {
-                responseData += chunk;
-            });
-
-            req.on('end', () => {
-                const statusCode = responseHeaders[':status'];
-
-                if (statusCode >= 200 && statusCode < 300) {
-                    try {
-                        const parsed = JSON.parse(responseData);
-                        resolve(parsed);
-                    } catch (error) {
-                        reject(new Error(`Failed to parse response: ${error.message}`));
-                    }
-                } else {
-                    const error = new Error(`HTTP ${statusCode}: ${responseData}`);
-                    error.statusCode = statusCode;
-                    error.responseBody = responseData;
-
-                    // Capture Retry-After header for 429 rate limiting
-                    if (statusCode === 429 && responseHeaders['retry-after']) {
-                        error.retryAfter = parseInt(responseHeaders['retry-after']);
-                    }
-
-                    reject(error);
-                }
-            });
-
-            req.on('error', (error) => {
-                reject(error);
-            });
-
-            // Send request body
-            req.write(postData);
-            req.end();
-        });
-    }
-
-    /**
-     * Parse Skyflow tokenize response
-     *
-     * @param {Array} batch - Original batch
-     * @param {Object} responseData - Skyflow response
-     * @param {string} column - Column name
-     * @returns {Array} Results
-     * @private
-     */
-    _parseTokenizeResponse(batch, responseData, column) {
-        if (!responseData.records || !Array.isArray(responseData.records)) {
-            throw new Error('Invalid Skyflow response format: missing records array');
+        } catch (error) {
+            console.error(`Detokenization failed for ${dataType}:`, error.message);
+            return tokens.map(t => ({
+                rowIndex: t.rowIndex,
+                value: null,
+                error: error.message
+            }));
         }
+    }
 
+    /**
+     * Parse SDK insert response
+     * @private
+     */
+    _parseInsertResponse(values, response, column) {
         const results = [];
 
-        for (let i = 0; i < batch.length; i++) {
-            const item = batch[i];
-            const record = responseData.records[i];
+        // SDK response format: { insertedFields: [{skyflowId, tokens: {column: token}}], errors: [...] }
+        const insertedFields = response.insertedFields || [];
+        const errors = response.errors || [];
 
-            if (!record) {
+        for (let i = 0; i < values.length; i++) {
+            const item = values[i];
+
+            // Check if this index has an error
+            const errorForIndex = errors.find(e => e.index === i);
+            if (errorForIndex) {
                 results.push({
                     rowIndex: item.rowIndex,
                     token: null,
-                    error: 'No record returned from Skyflow'
+                    error: errorForIndex.error || 'Unknown error'
                 });
                 continue;
             }
 
-            if (record.error) {
+            // Get token from insertedFields
+            const inserted = insertedFields[i];
+            if (inserted && inserted.tokens && inserted.tokens[column]) {
+                results.push({
+                    rowIndex: item.rowIndex,
+                    token: inserted.tokens[column],
+                    error: null
+                });
+            } else {
                 results.push({
                     rowIndex: item.rowIndex,
                     token: null,
-                    error: record.error.message || 'Unknown error'
+                    error: 'No token returned from SDK'
                 });
-                continue;
             }
-
-            const token = record.tokens && record.tokens[column] ? record.tokens[column] : null;
-
-            if (!token) {
-                results.push({
-                    rowIndex: item.rowIndex,
-                    token: null,
-                    error: 'No token returned from Skyflow'
-                });
-                continue;
-            }
-
-            results.push({
-                rowIndex: item.rowIndex,
-                token: token,
-                error: null
-            });
         }
 
         return results;
     }
 
     /**
-     * Parse Skyflow detokenize response
-     *
-     * @param {Array} batch - Original batch
-     * @param {Object} responseData - Skyflow response
-     * @returns {Array} Results
+     * Parse SDK detokenize response
      * @private
      */
-    _parseDetokenizeResponse(batch, responseData) {
-        if (!responseData.records || !Array.isArray(responseData.records)) {
-            throw new Error('Invalid Skyflow response format: missing records array');
-        }
-
+    _parseDetokenizeResponse(tokens, response) {
         const results = [];
 
-        for (let i = 0; i < batch.length; i++) {
-            const item = batch[i];
-            const record = responseData.records[i];
+        // SDK response format: { detokenizedFields: [{value}], errors: [...] }
+        const detokenizedFields = response.detokenizedFields || [];
+        const errors = response.errors || [];
 
-            if (!record) {
+        for (let i = 0; i < tokens.length; i++) {
+            const item = tokens[i];
+
+            // Check if this index has an error
+            const errorForIndex = errors.find(e => e.index === i);
+            if (errorForIndex) {
                 results.push({
                     rowIndex: item.rowIndex,
                     value: null,
-                    error: 'No record returned from Skyflow'
+                    error: errorForIndex.error || 'Unknown error'
                 });
                 continue;
             }
 
-            if (record.error) {
+            // Get value from detokenizedFields
+            const detokenized = detokenizedFields[i];
+            if (detokenized && detokenized.value !== undefined) {
+                results.push({
+                    rowIndex: item.rowIndex,
+                    value: detokenized.value,
+                    error: null
+                });
+            } else {
                 results.push({
                     rowIndex: item.rowIndex,
                     value: null,
-                    error: record.error.message || 'Unknown error'
+                    error: 'No value returned from SDK'
                 });
-                continue;
             }
-
-            const value = record.value || record.valueStr || null;
-
-            results.push({
-                rowIndex: item.rowIndex,
-                value: value,
-                error: null
-            });
         }
 
         return results;
     }
 
     /**
-     * Sleep for specified milliseconds
-     *
-     * @param {number} ms - Milliseconds to sleep
-     * @returns {Promise<void>}
-     * @private
-     */
-    _sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
-    }
-
-    /**
-     * Clean up resources
+     * Clean up resources (if needed)
      */
     destroy() {
-        if (this.sessionManager) {
-            this.sessionManager.destroy();
-        }
-        console.log('SkyflowClient destroyed', {
-            bufferPoolStats: this.bufferPool.stats()
-        });
+        console.log('SkyflowClient destroyed');
     }
 }
 

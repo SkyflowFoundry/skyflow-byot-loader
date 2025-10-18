@@ -1,67 +1,90 @@
 /**
- * Configuration Module
+ * Configuration Management
  *
  * Loads configuration from AWS Secrets Manager or environment variables.
- * Supports credential rotation without code redeployment.
+ * Supports Skyflow Node.js SDK configuration format.
  */
 
 const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
 
 /**
- * Load configuration from AWS Secrets Manager or environment variables
+ * Load configuration from AWS Secrets Manager or environment
  *
  * @returns {Promise<Object>} Configuration object
  */
 async function loadConfig() {
-    const useSecretsManager = process.env.USE_SECRETS_MANAGER === 'true';
+    console.log('Loading configuration...');
 
-    if (useSecretsManager) {
-        console.log('Loading configuration from AWS Secrets Manager');
+    // Try Secrets Manager first
+    if (process.env.SECRETS_MANAGER_SECRET_NAME) {
+        console.log('Loading from AWS Secrets Manager:', process.env.SECRETS_MANAGER_SECRET_NAME);
         return await loadFromSecretsManager();
     }
 
-    console.log('Loading configuration from environment variables');
+    // Fallback to environment variables
+    console.log('Loading from environment variables');
     return loadFromEnvironment();
 }
 
 /**
  * Load configuration from AWS Secrets Manager
  *
+ * Creates a fresh client on each call to avoid stale credential issues.
+ * Implements retry logic for transient failures.
+ *
  * @returns {Promise<Object>} Configuration object
- * @private
  */
 async function loadFromSecretsManager() {
-    const secretName = process.env.SECRET_NAME || 'skyflow-tokenization-config';
+    const secretName = process.env.SECRETS_MANAGER_SECRET_NAME;
     const region = process.env.AWS_REGION || 'us-east-1';
 
-    console.log(`Fetching secret: ${secretName} from region: ${region}`);
+    const maxRetries = 3;
+    const baseDelay = 100; // milliseconds
 
-    try {
-        const client = new SecretsManagerClient({ region });
-        const command = new GetSecretValueCommand({ SecretId: secretName });
-        const response = await client.send(command);
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            // Create fresh client each time to avoid stale credentials
+            const client = new SecretsManagerClient({
+                region,
+                maxAttempts: 3
+            });
+            const command = new GetSecretValueCommand({ SecretId: secretName });
 
-        if (!response.SecretString) {
-            throw new Error(`Secret ${secretName} has no string value`);
+            const data = await client.send(command);
+            const config = JSON.parse(data.SecretString);
+
+            console.log('Configuration loaded from Secrets Manager', {
+                attempt,
+                hasVaultUrl: !!config.vault_url,
+                hasBearerToken: !!config.bearer_token,
+                hasDataTypeMappings: !!config.data_type_mappings,
+                hasCredentials: !!config.credentials,
+                hasVaults: !!config.vaults
+            });
+
+            return normalizeConfig(config);
+        } catch (error) {
+            const isLastAttempt = attempt === maxRetries;
+            const isRetryable = error.name === 'InvalidSignatureException' ||
+                               error.name === 'ExpiredTokenException' ||
+                               error.name === 'InvalidTokenException' ||
+                               error.$metadata?.httpStatusCode >= 500;
+
+            console.error(`Failed to load from Secrets Manager (attempt ${attempt}/${maxRetries}):`, {
+                error: error.message,
+                errorName: error.name,
+                isRetryable
+            });
+
+            if (isLastAttempt || !isRetryable) {
+                throw new Error(`Failed to load configuration from Secrets Manager: ${error.message}`);
+            }
+
+            // Exponential backoff with jitter
+            const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 100;
+            console.log(`Retrying in ${Math.round(delay)}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
         }
-
-        const config = JSON.parse(response.SecretString);
-
-        // Validate required fields
-        validateConfig(config);
-
-        console.log('Successfully loaded configuration from Secrets Manager', {
-            vaultUrl: config.vault_url || config.vaultUrl,
-            batchSize: config.batch_size || config.batchSize,
-            maxConcurrency: config.max_concurrency || config.maxConcurrency
-        });
-
-        // Normalize field names (support both snake_case and camelCase)
-        return normalizeConfig(config);
-
-    } catch (error) {
-        console.error('Failed to load configuration from Secrets Manager:', error);
-        throw new Error(`Failed to load configuration from Secrets Manager: ${error.message}`);
     }
 }
 
@@ -69,114 +92,196 @@ async function loadFromSecretsManager() {
  * Load configuration from environment variables
  *
  * @returns {Object} Configuration object
- * @private
  */
 function loadFromEnvironment() {
-    const config = {
-        vaultUrl: process.env.VAULT_URL,
-        bearerToken: process.env.BEARER_TOKEN,
-        batchSize: parseInt(process.env.BATCH_SIZE || '100'),
-        maxConcurrency: parseInt(process.env.MAX_CONCURRENCY || '20'),
-        maxRetries: parseInt(process.env.MAX_RETRIES || '3'),
-        retryDelay: parseFloat(process.env.RETRY_DELAY || '1.0'),
-        dataTypeMappings: {}
-    };
-
-    // Load data type mappings from environment variables
+    const vaults = [];
     const dataTypes = ['NAME', 'ID', 'DOB', 'SSN'];
+
     for (const dataType of dataTypes) {
         const vaultId = process.env[`VAULT_ID_${dataType}`];
+        const clusterId = process.env[`CLUSTER_ID_${dataType}`];
         const table = process.env[`TABLE_${dataType}`];
         const column = process.env[`COLUMN_${dataType}`];
 
-        if (vaultId && table && column) {
-            config.dataTypeMappings[dataType] = {
-                vaultId: vaultId,
-                table: table,
-                column: column
-            };
+        if (vaultId && clusterId && table && column) {
+            vaults.push({
+                vaultId,
+                clusterId,
+                table,
+                column,
+                dataType
+            });
+            console.log(`Configured vault for ${dataType}: vault=${vaultId}, table=${table}`);
         }
     }
 
-    validateConfig(config);
+    const config = {
+        credentials: {
+            apiKey: process.env.SKYFLOW_API_KEY
+        },
+        vaults,
+        logLevel: process.env.LOG_LEVEL || 'INFO'
+    };
 
-    console.log('Successfully loaded configuration from environment variables', {
-        vaultUrl: config.vaultUrl,
-        batchSize: config.batchSize,
-        maxConcurrency: config.maxConcurrency
+    return normalizeConfig(config);
+}
+
+/**
+ * Normalize and validate configuration
+ * Supports both old and new configuration formats
+ *
+ * @param {Object} config - Raw configuration
+ * @returns {Object} Normalized configuration
+ */
+function normalizeConfig(config) {
+    // Check if this is the OLD format (has vault_url or bearer_token)
+    const isOldFormat = config.vault_url || config.bearer_token || config.data_type_mappings;
+
+    if (isOldFormat) {
+        console.log('Detected old configuration format - auto-converting to SDK format');
+        config = convertOldToNewFormat(config);
+    }
+
+    // Validate credentials (support both service account and API key)
+    if (!config.credentials) {
+        throw new Error('Missing credentials in configuration');
+    }
+
+    const hasServiceAccount = config.credentials.clientID && config.credentials.privateKey;
+    const hasApiKey = config.credentials.apiKey;
+
+    if (!hasServiceAccount && !hasApiKey) {
+        throw new Error('Credentials must have either service account fields (clientID, privateKey) or apiKey');
+    }
+
+    console.log('Credentials type:', hasServiceAccount ? 'Service Account (JWT)' : 'API Key');
+
+    // Validate vaults
+    if (!config.vaults || config.vaults.length === 0) {
+        throw new Error('No vaults configured. At least one vault is required.');
+    }
+
+    // Validate each vault has required fields
+    for (const vault of config.vaults) {
+        if (!vault.vaultId) {
+            throw new Error('Missing vaultId in vault configuration');
+        }
+        if (!vault.clusterId) {
+            throw new Error('Missing clusterId in vault configuration');
+        }
+        if (!vault.table) {
+            throw new Error('Missing table in vault configuration');
+        }
+        if (!vault.column) {
+            throw new Error('Missing column in vault configuration');
+        }
+        if (!vault.dataType) {
+            throw new Error('Missing dataType in vault configuration');
+        }
+    }
+
+    // Create lookup map for fast access by data type
+    config.vaultsByDataType = {};
+    for (const vault of config.vaults) {
+        const dataTypeUpper = vault.dataType.toUpperCase();
+        config.vaultsByDataType[dataTypeUpper] = vault;
+    }
+
+    // Set default log level if not specified
+    if (!config.logLevel) {
+        config.logLevel = 'INFO';
+    }
+
+    // Validate batch size
+    if (!config.batchSize) {
+        throw new Error('Missing batchSize in configuration');
+    }
+
+    if (typeof config.batchSize !== 'number' || config.batchSize < 1) {
+        throw new Error('batchSize must be a positive number');
+    }
+
+    console.log('Configuration validated successfully', {
+        vaultCount: config.vaults.length,
+        dataTypes: Object.keys(config.vaultsByDataType),
+        logLevel: config.logLevel,
+        batchSize: config.batchSize
     });
 
     return config;
 }
 
 /**
- * Normalize configuration field names (snake_case to camelCase)
+ * Convert old configuration format to new SDK format
  *
- * @param {Object} config - Raw configuration
- * @returns {Object} Normalized configuration
- * @private
+ * @param {Object} oldConfig - Old format configuration
+ * @returns {Object} New format configuration
  */
-function normalizeConfig(config) {
-    return {
-        vaultUrl: config.vault_url || config.vaultUrl,
-        bearerToken: config.bearer_token || config.bearerToken,
-        batchSize: config.batch_size || config.batchSize || 100,
-        maxConcurrency: config.max_concurrency || config.maxConcurrency || 20,
-        maxRetries: config.max_retries || config.maxRetries || 3,
-        retryDelay: config.retry_delay_ms ? config.retry_delay_ms / 1000 : (config.retryDelay || 1.0),
-        dataTypeMappings: normalizeDataTypeMappings(config.data_type_mappings || config.dataTypeMappings || {})
-    };
-}
+function convertOldToNewFormat(oldConfig) {
+    console.log('Converting old config format to SDK format...', {
+        hasBearerToken: !!oldConfig.bearer_token,
+        bearerTokenValue: oldConfig.bearer_token ? oldConfig.bearer_token.substring(0, 10) + '...' : 'MISSING'
+    });
 
-/**
- * Normalize data type mappings field names
- *
- * @param {Object} mappings - Raw mappings
- * @returns {Object} Normalized mappings
- * @private
- */
-function normalizeDataTypeMappings(mappings) {
-    const normalized = {};
+    // Extract cluster ID from vault_url if present
+    let clusterId = null;
+    if (oldConfig.vault_url) {
+        const match = oldConfig.vault_url.match(/https:\/\/([^.]+)\./);
+        if (match) {
+            clusterId = match[1];
+            console.log('Extracted clusterId from vault_url:', clusterId);
+        }
+    }
+
+    // Convert credentials - support both bearer_token and bearerToken
+    const bearerToken = oldConfig.bearer_token || oldConfig.bearerToken;
+    if (!bearerToken) {
+        console.error('CRITICAL: No bearer_token found in old config!', {
+            configKeys: Object.keys(oldConfig)
+        });
+        throw new Error('bearer_token is required in old configuration format');
+    }
+
+    const credentials = {
+        apiKey: bearerToken
+    };
+
+    console.log('Credentials converted', {
+        hasApiKey: !!credentials.apiKey,
+        apiKeyPrefix: credentials.apiKey ? credentials.apiKey.substring(0, 10) + '...' : 'MISSING'
+    });
+
+    // Convert data_type_mappings to vaults array
+    const vaults = [];
+    const mappings = oldConfig.data_type_mappings || oldConfig.dataTypeMappings || {};
 
     for (const [dataType, mapping] of Object.entries(mappings)) {
-        normalized[dataType] = {
+        vaults.push({
             vaultId: mapping.vault_id || mapping.vaultId,
+            clusterId: clusterId, // Use extracted clusterId for all vaults
             table: mapping.table,
-            column: mapping.column
-        };
+            column: mapping.column,
+            dataType: dataType.toUpperCase()
+        });
     }
 
-    return normalized;
-}
+    const newConfig = {
+        credentials,
+        vaults,
+        logLevel: oldConfig.logLevel || 'INFO',
+        batchSize: oldConfig.batch_size || oldConfig.batchSize || 100
+    };
 
-/**
- * Validate configuration
- *
- * @param {Object} config - Configuration to validate
- * @throws {Error} If configuration is invalid
- * @private
- */
-function validateConfig(config) {
-    const vaultUrl = config.vault_url || config.vaultUrl;
-    const bearerToken = config.bearer_token || config.bearerToken;
+    console.log('Old config converted successfully', {
+        oldFields: Object.keys(oldConfig),
+        newVaultCount: vaults.length,
+        hasCredentials: !!newConfig.credentials,
+        hasApiKey: !!newConfig.credentials.apiKey,
+        batchSize: newConfig.batchSize,
+        ignoredFields: ['max_concurrency', 'max_retries', 'retry_delay_ms'].filter(f => oldConfig[f])
+    });
 
-    if (!vaultUrl) {
-        throw new Error('vault_url is required in configuration');
-    }
-
-    if (!bearerToken) {
-        throw new Error('bearer_token is required in configuration');
-    }
-
-    const batchSize = config.batch_size || config.batchSize;
-    if (batchSize && (batchSize <= 0 || batchSize > 200)) {
-        throw new Error('batch_size must be between 1 and 200');
-    }
-
-    const maxConcurrency = config.max_concurrency || config.maxConcurrency;
-    if (maxConcurrency && maxConcurrency <= 0) {
-        throw new Error('max_concurrency must be > 0');
-    }
+    return newConfig;
 }
 
 module.exports = {
