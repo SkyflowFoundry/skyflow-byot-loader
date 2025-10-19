@@ -70,11 +70,12 @@ async function loadFromSecretsManager() {
 
             console.log('Configuration loaded from Secrets Manager', {
                 attempt,
-                hasVaultUrl: !!config.vault_url,
+                hasVaultUrl: !!(config.vaults?.vaultUrl || config.vault_url),
                 hasBearerToken: !!config.bearer_token,
                 hasDataTypeMappings: !!config.data_type_mappings,
                 hasCredentials: !!config.credentials,
-                hasVaults: !!config.vaults
+                hasVaults: !!config.vaults,
+                vaultsIsObject: typeof config.vaults === 'object' && !Array.isArray(config.vaults)
             });
 
             return normalizeConfig(config);
@@ -171,18 +172,43 @@ function normalizeConfig(config) {
 
     console.log('Credentials type:', hasServiceAccount ? 'Service Account (JWT)' : 'API Key');
 
-    // Validate vaults
-    if (!config.vaults || config.vaults.length === 0) {
-        throw new Error('No vaults configured. At least one vault is required.');
+    // Validate vaults structure (new format only)
+    if (!config.vaults) {
+        throw new Error('Missing vaults in configuration');
     }
 
-    // Validate each vault has required fields
-    for (const vault of config.vaults) {
+    if (typeof config.vaults !== 'object' || Array.isArray(config.vaults)) {
+        throw new Error('Invalid vaults configuration. Expected format: { vaultUrl: "...", definitions: [...] }');
+    }
+
+    // Extract vaultUrl and definitions
+    const vaultUrl = config.vaults.vaultUrl;
+    const vaultDefinitions = config.vaults.definitions;
+
+    if (!vaultUrl) {
+        throw new Error('Missing vaultUrl in vaults configuration');
+    }
+    if (!vaultDefinitions || !Array.isArray(vaultDefinitions)) {
+        throw new Error('Missing or invalid definitions in vaults configuration');
+    }
+
+    // Extract clusterId from vaultUrl
+    const clusterIdMatch = vaultUrl.match(/https:\/\/([^.]+)\./);
+    if (!clusterIdMatch) {
+        throw new Error(`Invalid vaultUrl format: ${vaultUrl}. Expected format: https://<clusterId>.vault.skyflowapis.com`);
+    }
+    const clusterId = clusterIdMatch[1];
+    console.log('Extracted clusterId from vaultUrl:', clusterId);
+
+    // Validate vault definitions
+    if (vaultDefinitions.length === 0) {
+        throw new Error('No vault definitions configured. At least one vault is required.');
+    }
+
+    // Validate each vault has required fields and inject clusterId
+    for (const vault of vaultDefinitions) {
         if (!vault.vaultId) {
             throw new Error('Missing vaultId in vault configuration');
-        }
-        if (!vault.clusterId) {
-            throw new Error('Missing clusterId in vault configuration');
         }
         if (!vault.table) {
             throw new Error('Missing table in vault configuration');
@@ -193,7 +219,12 @@ function normalizeConfig(config) {
         if (!vault.dataType) {
             throw new Error('Missing dataType in vault configuration');
         }
+        // Inject clusterId from vaultUrl into each vault
+        vault.clusterId = clusterId;
     }
+
+    // Replace config.vaults with the array of definitions for internal use
+    config.vaults = vaultDefinitions;
 
     // Create lookup map for fast access by data type
     config.vaultsByDataType = {};
@@ -268,15 +299,12 @@ function convertOldToNewFormat(oldConfig) {
         bearerTokenValue: oldConfig.bearer_token ? oldConfig.bearer_token.substring(0, 10) + '...' : 'MISSING'
     });
 
-    // Extract cluster ID from vault_url if present
-    let clusterId = null;
-    if (oldConfig.vault_url) {
-        const match = oldConfig.vault_url.match(/https:\/\/([^.]+)\./);
-        if (match) {
-            clusterId = match[1];
-            console.log('Extracted clusterId from vault_url:', clusterId);
-        }
+    // Extract vaultUrl from old vault_url field
+    let vaultUrl = oldConfig.vault_url;
+    if (!vaultUrl) {
+        throw new Error('vault_url is required in old configuration format');
     }
+    console.log('Using vaultUrl from old config:', vaultUrl);
 
     // Convert credentials - support both bearer_token and bearerToken
     const bearerToken = oldConfig.bearer_token || oldConfig.bearerToken;
@@ -296,14 +324,13 @@ function convertOldToNewFormat(oldConfig) {
         apiKeyPrefix: credentials.apiKey ? credentials.apiKey.substring(0, 10) + '...' : 'MISSING'
     });
 
-    // Convert data_type_mappings to vaults array
-    const vaults = [];
+    // Convert data_type_mappings to vaults definitions (without clusterId - will be extracted from vaultUrl)
+    const vaultDefinitions = [];
     const mappings = oldConfig.data_type_mappings || oldConfig.dataTypeMappings || {};
 
     for (const [dataType, mapping] of Object.entries(mappings)) {
-        vaults.push({
+        vaultDefinitions.push({
             vaultId: mapping.vault_id || mapping.vaultId,
-            clusterId: clusterId, // Use extracted clusterId for all vaults
             table: mapping.table,
             column: mapping.column,
             dataType: dataType.toUpperCase()
@@ -312,7 +339,10 @@ function convertOldToNewFormat(oldConfig) {
 
     const newConfig = {
         credentials,
-        vaults,
+        vaults: {
+            vaultUrl,
+            definitions: vaultDefinitions
+        },
         logLevel: oldConfig.logLevel || 'INFO',
         // Legacy single values (fallback)
         batchSize: oldConfig.batch_size || oldConfig.batchSize || 100,
@@ -326,10 +356,10 @@ function convertOldToNewFormat(oldConfig) {
 
     console.log('Old config converted successfully', {
         oldFields: Object.keys(oldConfig),
-        newVaultCount: vaults.length,
+        newVaultCount: vaultDefinitions.length,
         hasCredentials: !!newConfig.credentials,
         hasApiKey: !!newConfig.credentials.apiKey,
-        batchSize: newConfig.batchSize,
+        vaultUrl: newConfig.vaults.vaultUrl,
         ignoredFields: ['max_concurrency', 'max_retries', 'retry_delay_ms'].filter(f => oldConfig[f])
     });
 
