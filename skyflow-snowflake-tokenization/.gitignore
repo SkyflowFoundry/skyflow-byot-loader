@@ -17,7 +17,6 @@ dist/
 # Logs
 *.log
 npm-debug.log*
-*.pdf
 
 # Environment and configuration
 config.json
@@ -46,9 +45,6 @@ Thumbs.db
 *.bak
 *.backup
 *.tmp
-
-# PDF documentation (generated)
-*.pdf
 
 # Test output
 response.json
