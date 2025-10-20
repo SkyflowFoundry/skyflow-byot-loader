@@ -1,5 +1,6 @@
 {
   "credentials": {
+    "apiKey": "YOUR_SKYFLOW_API_KEY_HERE",
     "clientID": "YOUR_CLIENT_ID",
     "clientName": "YOUR_SERVICE_ACCOUNT_NAME",
     "tokenURI": "https://manage.skyflowapis.com/v1/auth/sa/oauth/token",
@@ -7,6 +8,7 @@
     "privateKey": "-----BEGIN PRIVATE KEY-----\nYOUR_PRIVATE_KEY_HERE\n-----END PRIVATE KEY-----\n",
     "keyAlgorithm": "KEY_ALG_RSA_2048"
   },
+
   "vaults": {
     "vaultUrl": "https://YOUR_CLUSTER_ID.vault.skyflowapis.com",
     "definitions": [
@@ -36,6 +38,7 @@
       }
     ]
   },
+
   "tokenizeBatchSize": 5,
   "tokenizeMaxConcurrency": 400,
   "detokenizeBatchSize": 300,

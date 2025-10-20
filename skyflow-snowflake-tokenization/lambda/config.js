@@ -22,22 +22,56 @@ async function loadConfig() {
         return await loadFromSecretsManager();
     }
 
-    // Try loading from local credentials.json file (only if Secrets Manager NOT configured)
-    try {
-        console.log('Loading from local credentials.json file');
-        const fs = require('fs');
-        const path = require('path');
-        const credentialsPath = path.join(__dirname, 'credentials.json');
-        const fileContent = fs.readFileSync(credentialsPath, 'utf8');
-        const config = JSON.parse(fileContent);
-        console.log('Successfully loaded credentials.json');
-        return normalizeConfig(config);
-    } catch (error) {
-        console.log('Failed to load credentials.json:', error.message);
+    // Try loading from SKYFLOW_* environment variables (only if Secrets Manager NOT configured)
+    if (process.env.SKYFLOW_CLIENT_ID || process.env.SKYFLOW_API_KEY || process.env.SKYFLOW_VAULT_URL) {
+        try {
+            console.log('Loading from SKYFLOW_* environment variables');
+
+            // Reconstruct credentials object (JWT first, then API Key)
+            let credentials;
+            if (process.env.SKYFLOW_CLIENT_ID) {
+                console.log('Using JWT (Service Account) authentication from environment variables');
+                credentials = {
+                    clientID: process.env.SKYFLOW_CLIENT_ID,
+                    clientName: process.env.SKYFLOW_CLIENT_NAME,
+                    tokenURI: process.env.SKYFLOW_TOKEN_URI,
+                    keyID: process.env.SKYFLOW_KEY_ID,
+                    privateKey: process.env.SKYFLOW_PRIVATE_KEY,
+                    keyAlgorithm: process.env.SKYFLOW_KEY_ALGORITHM
+                };
+            } else {
+                console.log('Using API Key authentication from environment variables');
+                credentials = {
+                    apiKey: process.env.SKYFLOW_API_KEY
+                };
+            }
+
+            // Parse vault definitions from JSON string
+            const vaultDefinitions = JSON.parse(process.env.SKYFLOW_VAULT_DEFINITIONS || '[]');
+
+            // Reconstruct config object
+            const config = {
+                credentials,
+                vaults: {
+                    vaultUrl: process.env.SKYFLOW_VAULT_URL,
+                    definitions: vaultDefinitions
+                },
+                tokenizeBatchSize: parseInt(process.env.SKYFLOW_TOKENIZE_BATCH_SIZE, 10),
+                tokenizeMaxConcurrency: parseInt(process.env.SKYFLOW_TOKENIZE_MAX_CONCURRENCY, 10),
+                detokenizeBatchSize: parseInt(process.env.SKYFLOW_DETOKENIZE_BATCH_SIZE, 10),
+                detokenizeMaxConcurrency: parseInt(process.env.SKYFLOW_DETOKENIZE_MAX_CONCURRENCY, 10),
+                logLevel: process.env.SKYFLOW_LOG_LEVEL || 'INFO'
+            };
+
+            console.log('Successfully loaded config from environment variables');
+            return normalizeConfig(config);
+        } catch (error) {
+            console.log('Failed to parse SKYFLOW_* environment variables:', error.message);
+        }
     }
 
-    // Fallback to environment variables
-    console.log('Loading from environment variables');
+    // Fallback to legacy environment variables
+    console.log('Loading from legacy environment variables');
     return loadFromEnvironment();
 }
 
