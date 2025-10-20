@@ -169,8 +169,8 @@ function validateConfig(config) {
     }
 
     const batchSize = config.batch_size || config.batchSize;
-    if (batchSize && (batchSize <= 0 || batchSize > 200)) {
-        throw new Error('batch_size must be between 1 and 200');
+    if (batchSize && batchSize <= 0) {
+        throw new Error('batch_size must be greater than 0');
     }
 
     const maxConcurrency = config.max_concurrency || config.maxConcurrency;
