@@ -11,17 +11,51 @@ const SkyflowClient = require('./skyflow-client');
 // Singleton client instance (reused across warm Lambda invocations)
 let skyflowClient = null;
 let config = null;
+let configLoadTime = null;
+let configLoadPromise = null; // Prevents concurrent config loads
+const CONFIG_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Initialize Skyflow client with configuration
  *
+ * Reloads config if:
+ * - Not yet loaded
+ * - Cache expired (older than 5 minutes)
+ * - Client not initialized
+ *
+ * Uses promise locking to prevent race conditions when multiple
+ * concurrent invocations try to reload config simultaneously.
+ *
  * @returns {Promise<SkyflowClient>} Initialized client
  */
 async function getSkyflowClient() {
-    if (!skyflowClient) {
-        config = await loadConfig();
-        skyflowClient = new SkyflowClient(config);
-        console.log('Initialized SkyflowClient');
+    const now = Date.now();
+    const configExpired = configLoadTime && (now - configLoadTime > CONFIG_CACHE_TTL_MS);
+
+    if (!skyflowClient || !config || configExpired) {
+        // Prevent multiple concurrent config loads with promise locking
+        if (!configLoadPromise) {
+            configLoadPromise = (async () => {
+                try {
+                    if (configExpired) {
+                        console.log('Config cache expired, reloading from Secrets Manager');
+                    }
+
+                    config = await loadConfig();
+                    configLoadTime = Date.now();
+                    skyflowClient = new SkyflowClient(config);
+                    console.log('Initialized SkyflowClient', {
+                        cacheExpired: configExpired,
+                        loadTime: new Date(configLoadTime).toISOString()
+                    });
+                    return skyflowClient;
+                } finally {
+                    // Clear promise to allow future reloads
+                    configLoadPromise = null;
+                }
+            })();
+        }
+        return await configLoadPromise;
     }
     return skyflowClient;
 }
@@ -44,17 +78,22 @@ function parseDetokenizeRequest(event) {
 
         const [rowIndex, token, dataTypeOrVaultId] = row;
 
-        // Resolve vault ID: check if it's a data type (NAME, ID, etc.) or actual vault ID
+        // Resolve vault ID and data type
         let vaultId = dataTypeOrVaultId;
-        if (dataTypeOrVaultId && config.dataTypeMappings[dataTypeOrVaultId.toUpperCase()]) {
-            vaultId = config.dataTypeMappings[dataTypeOrVaultId.toUpperCase()].vaultId;
+        let dataType = null;
+
+        if (dataTypeOrVaultId && config.vaultsByDataType[dataTypeOrVaultId.toUpperCase()]) {
+            const vault = config.vaultsByDataType[dataTypeOrVaultId.toUpperCase()];
+            vaultId = vault.vaultId;
+            dataType = dataTypeOrVaultId.toUpperCase();
             console.log(`Resolved data type '${dataTypeOrVaultId}' to vault ID: ${vaultId}`);
         }
 
         return {
             rowIndex,
             token,
-            vaultId: vaultId || null
+            vaultId: vaultId || null,
+            dataType: dataType
         };
     });
 
@@ -75,10 +114,10 @@ function parseTokenizeRequest(event, dataType) {
     }
 
     const dataTypeUpper = dataType.toUpperCase();
-    const mapping = config.dataTypeMappings[dataTypeUpper];
+    const vault = config.vaultsByDataType[dataTypeUpper];
 
-    if (!mapping) {
-        throw new Error(`Unknown data type: ${dataType}. Available types: ${Object.keys(config.dataTypeMappings).join(', ')}`);
+    if (!vault) {
+        throw new Error(`Unknown data type: ${dataType}. Available types: ${Object.keys(config.vaultsByDataType).join(', ')}`);
     }
 
     const values = event.data.map(row => {
@@ -91,9 +130,10 @@ function parseTokenizeRequest(event, dataType) {
         return {
             rowIndex,
             value,
-            vaultId: mapping.vaultId,
-            table: mapping.table,
-            column: mapping.column
+            vaultId: vault.vaultId,
+            table: vault.table,
+            column: vault.column,
+            dataType: dataTypeUpper
         };
     });
 

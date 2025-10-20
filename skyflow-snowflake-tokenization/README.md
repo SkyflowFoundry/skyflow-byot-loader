@@ -36,12 +36,10 @@ SELECT DETOK_NAME(TOK_NAME('Jane Smith')) as should_be_jane_smith;
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ AWS Lambda Function (Node.js 20.x or Go 1.x)               │
-│ - HTTP/2 with connection multiplexing                       │
-│ - Buffer pooling (30-50% fewer allocations)                │
-│ - Adaptive retry with jitter                                │
-│ - Batch processing (100-200 per API call)                  │
-│ - Parallel processing (10-20 concurrent batches)           │
+│ - Official Skyflow Node.js SDK v2.0.0                      │
+│ - Batch processing (SDK-managed)                           │
 │ - Upsert mode for tokenization (idempotent)                │
+│ - Data-type specific vault routing                         │
 └────────────────────┬────────────────────────────────────────┘
                      │ HTTPS
                      ▼
@@ -61,11 +59,11 @@ Choose the implementation that best fits your requirements:
 **Best for:** Rapid deployment, AWS Secrets Manager integration, easy maintenance
 
 **Features:**
-- ✅ HTTP/2 support with connection multiplexing (100 concurrent streams)
-- ✅ Buffer pooling for reduced memory allocations
-- ✅ Adaptive retry logic with jitter (prevents thundering herd)
+- ✅ Official Skyflow Node.js SDK v2.0.0
+- ✅ Simplified codebase with official support
 - ✅ AWS Secrets Manager integration (secure credential storage)
-- ✅ 40-60% faster than baseline implementation
+- ✅ Automatic batch processing via SDK
+- ✅ Data-type specific vault routing
 - ✅ Easy to modify and extend
 - ✅ **Distribution package available for customers**
 
@@ -82,11 +80,11 @@ Choose the implementation that best fits your requirements:
 **Best for:** Maximum performance, minimal cold start time, production scale
 
 **Features:**
-- ✅ Maximum throughput (20-30% faster than Node.js)
+- ✅ Custom HTTP client implementation
 - ✅ Minimal cold start (~50ms vs ~150ms for Node.js)
 - ✅ Lower memory footprint
-- ✅ Native HTTP/2 support
 - ✅ Compiled binary (no runtime dependencies)
+- ✅ Direct Skyflow API integration
 
 **Setup:** See `../skyflow-snowflake-tokenization-go-minimal/` directory
 
@@ -203,18 +201,11 @@ Extract the zip and follow `Skyflow-for-Snowflake-Deployment-Guide.md` for:
 
 ### Core Capabilities
 - ✅ **Bidirectional Operations**: Both tokenization and detokenization
-- ✅ **Batch Processing**: Automatically batches requests (100-200 per API call)
-- ✅ **Parallel Processing**: Processes up to 20 batches concurrently
+- ✅ **Batch Processing**: SDK-managed batch operations
 - ✅ **Upsert Mode**: Same plaintext always returns same token (idempotent)
 - ✅ **Multi-Vault Support**: Route different data types to separate vaults
-- ✅ **Error Handling**: Comprehensive retry logic with exponential backoff
-
-### Performance Optimizations
-- ✅ **HTTP/2**: Connection multiplexing with 100 concurrent streams
-- ✅ **Buffer Pooling**: 30-50% reduction in memory allocations
-- ✅ **Adaptive Retry**: Jitter prevents thundering herd (0.5x-1.5x randomization)
-- ✅ **Smart Rate Limiting**: Respects Retry-After headers for 429 responses
-- ✅ **Worker Pool**: Fixed concurrency eliminates overhead
+- ✅ **Error Handling**: Comprehensive error handling with continueOnError
+- ✅ **Official SDK**: Built on Skyflow Node.js SDK v2.0.0
 
 ### Security & Compliance
 - ✅ **AWS Secrets Manager**: Secure credential storage with rotation support
@@ -241,11 +232,11 @@ Extract the zip and follow `Skyflow-for-Snowflake-Deployment-Guide.md` for:
 | 100,000 tokens | ~3-5 minutes | ~2-3 minutes | $0.10 |
 | 1,000,000 tokens | ~30-50 minutes | ~20-30 minutes | $1.00 |
 
-### Performance Features Impact
-- HTTP/2: **20-30% faster** than HTTP/1.1
-- Buffer pooling: **30-50% fewer allocations**
-- Adaptive retry: **Eliminates retry storms** during rate limiting
-- Combined: **40-60% faster** than baseline implementation
+### SDK Integration Benefits
+- **Official Support**: Maintained by Skyflow engineering
+- **Simplified Codebase**: ~50% fewer lines of code
+- **Automatic Updates**: Bug fixes and features from SDK updates
+- **Type Safety**: TypeScript definitions included
 
 ---
 
@@ -260,9 +251,9 @@ skyflow-snowflake-tokenization/          # Node.js implementation (this director
 │
 ├── lambda/                              # Node.js Lambda implementation
 │   ├── config.js                        # AWS Secrets Manager integration
-│   ├── skyflow-client.js                # HTTP/2 client with optimizations
+│   ├── skyflow-client.js                # Skyflow SDK client wrapper
 │   ├── handler.js                       # Lambda entry point
-│   ├── package.json                     # Node.js dependencies
+│   ├── package.json                     # Node.js dependencies (includes skyflow-node SDK)
 │   ├── secrets-manager-config.json      # Secrets Manager template
 │   └── Skyflow-for-Snowflake-Deployment-Guide.md  # Manual setup guide
 │
@@ -370,25 +361,26 @@ Store credentials securely in AWS Secrets Manager:
 
 ```json
 {
-  "vault_url": "https://your-vault.vault.skyflowapis.com",
-  "bearer_token": "sky-xyz-your-token",
-  "default_vault_id": "vault-id-here",
-  "batch_size": 100,
-  "max_concurrency": 20,
-  "max_retries": 3,
-  "retry_delay_ms": 1000,
-  "data_type_mappings": {
-    "NAME": {
-      "vault_id": "vault-id-for-names",
+  "credentials": {
+    "apiKey": "sky-xyz-your-token"
+  },
+  "vaults": [
+    {
+      "vaultId": "vault-id-for-names",
+      "clusterId": "your-cluster-id",
       "table": "persons",
-      "column": "name"
+      "column": "name",
+      "dataType": "NAME"
     },
-    "SSN": {
-      "vault_id": "vault-id-for-ssns",
+    {
+      "vaultId": "vault-id-for-ssns",
+      "clusterId": "your-cluster-id",
       "table": "persons",
-      "column": "ssn"
+      "column": "ssn",
+      "dataType": "SSN"
     }
-  }
+  ],
+  "logLevel": "INFO"
 }
 ```
 
@@ -397,28 +389,25 @@ Store credentials securely in AWS Secrets Manager:
 For testing or non-Secrets Manager deployments:
 
 ```bash
-export VAULT_URL="https://your-vault.vault.skyflowapis.com"
-export BEARER_TOKEN="your-token"
-export DEFAULT_VAULT_ID="your-vault-id"
+export SKYFLOW_API_KEY="your-api-key-or-bearer-token"
+export VAULT_ID_NAME="vault-id-for-names"
+export CLUSTER_ID_NAME="your-cluster-id"
+export TABLE_NAME="persons"
+export COLUMN_NAME="name"
+# Repeat for ID, DOB, SSN data types
 ```
 
-### Performance Tuning
+### SDK Configuration
 
-Adjust settings in Secrets Manager configuration:
+The Skyflow Node.js SDK manages batching and performance internally. Configuration focuses on vault routing:
 
 ```json
 {
-  "batch_size": 100,        // Records per Skyflow API call (50-200)
-  "max_concurrency": 20,    // Parallel batches (10-30)
-  "max_retries": 3,         // Retry attempts (3-5)
-  "retry_delay_ms": 1000    // Base retry delay (500-2000)
+  "logLevel": "INFO"  // DEBUG, INFO, WARN, ERROR
 }
 ```
 
-**Tuning Guidelines:**
-- **Low latency priority**: `batch_size=50`, `max_concurrency=30`
-- **High throughput priority**: `batch_size=200`, `max_concurrency=20`
-- **Rate limit sensitive**: `batch_size=100`, `max_concurrency=10`
+**Note:** Batch size, concurrency, and retry logic are now managed by the SDK for optimal performance.
 
 ---
 
@@ -439,9 +428,9 @@ Monitor Lambda performance:
 # View Lambda logs in real-time
 aws logs tail /aws/lambda/skyflow-tokenization --follow --region us-east-1
 
-# Look for performance indicators:
-# - "Buffer pool stats: {hits: X, misses: Y}" (target: >80% hit rate)
-# - "http2: true, bufferPooling: true"
+# Look for indicators:
+# - "SkyflowClient initialized with SDK"
+# - "SDK insert completed in Xms"
 # - Request/response timing
 ```
 
@@ -476,7 +465,7 @@ SHOW FUNCTIONS LIKE 'DETOK_%';
 @snowflake/create_function.sql
 ```
 
-**2. "vault_url is required in configuration"**
+**2. "Missing credentials.apiKey in configuration"**
 ```bash
 # Check Lambda environment variables
 aws lambda get-function-configuration \
@@ -484,13 +473,13 @@ aws lambda get-function-configuration \
     --region us-east-1 \
     --query 'Environment.Variables'
 
-# Should show: USE_SECRETS_MANAGER=true, SECRET_NAME=skyflow-tokenization-config
+# Should show: SECRETS_MANAGER_SECRET_NAME=skyflow-tokenization-config
 ```
 
 **3. "HTTP 401 Unauthorized"**
-- Verify bearer token is valid in Secrets Manager
-- Check token has required permissions in Skyflow
-- Ensure vault_id matches your Skyflow vault
+- Verify API key is valid in Secrets Manager
+- Check key has required permissions in Skyflow
+- Ensure vaultId and clusterId are correct
 
 **4. "Access denied" or IAM errors**
 - Update Snowflake IAM role trust policy with correct ARN and External ID
@@ -498,10 +487,9 @@ aws lambda get-function-configuration \
 - Check Lambda role has Secrets Manager read permissions
 
 **5. Slow performance**
-- Increase Lambda memory (256MB → 512MB → 1024MB)
-- Adjust `batch_size` and `max_concurrency` in configuration
-- Check CloudWatch logs for buffer pool hit rate (target: >80%)
-- Verify HTTP/2 is enabled in logs
+- Increase Lambda memory (512MB → 1024MB)
+- Check CloudWatch logs for SDK timing
+- Verify data is being batched properly
 
 ### Debug Commands
 

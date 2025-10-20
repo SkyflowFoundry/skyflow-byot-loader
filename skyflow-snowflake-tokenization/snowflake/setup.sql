@@ -24,9 +24,9 @@ USE ROLE ACCOUNTADMIN;
 
 CREATE OR REPLACE API INTEGRATION skyflow_api_integration
     API_PROVIDER = aws_api_gateway
-    API_AWS_ROLE_ARN = 'YOUR_IAM_ROLE_ARN'
+    API_AWS_ROLE_ARN = 'arn:aws:iam::571930033416:role/SnowflakeAPIRole'
     ENABLED = TRUE
-    API_ALLOWED_PREFIXES = ('https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/');
+    API_ALLOWED_PREFIXES = ('https://23fv2q9z4i.execute-api.us-east-1.amazonaws.com/');
 
 -- ============================================================================
 -- STEP 2: Get Trust Policy for AWS IAM Role

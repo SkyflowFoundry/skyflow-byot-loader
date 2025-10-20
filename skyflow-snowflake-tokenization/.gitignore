@@ -7,6 +7,7 @@ deployment-info.txt
 lambda/function.zip
 lambda/node_modules/
 *.zip
+env-vars.json
 
 # Build and distribution artifacts
 build/
@@ -20,7 +21,8 @@ npm-debug.log*
 
 # Environment and configuration
 config.json
-secrets-manager-config.json
+skyflow-config.json
+!skyflow-config.example.json
 .snowflake-create-function.sql
 .env
 .env.local

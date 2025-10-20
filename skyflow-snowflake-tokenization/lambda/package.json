@@ -1,7 +1,7 @@
 {
   "name": "skyflow-snowflake-tokenization",
   "version": "2.0.0",
-  "description": "AWS Lambda function for Snowflake External Function to tokenize and detokenize Skyflow data with HTTP/2, buffer pooling, and adaptive retry",
+  "description": "AWS Lambda function for Snowflake External Function to tokenize and detokenize Skyflow data using official Skyflow Node.js SDK",
   "main": "handler.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -13,8 +13,7 @@
     "detokenization",
     "lambda",
     "external-function",
-    "http2",
-    "performance"
+    "sdk"
   ],
   "author": "",
   "license": "MIT",
@@ -22,6 +21,7 @@
     "node": ">=18.x"
   },
   "dependencies": {
-    "@aws-sdk/client-secrets-manager": "^3.645.0"
+    "@aws-sdk/client-secrets-manager": "^3.645.0",
+    "skyflow-node": "^2.0.0"
   }
 }
