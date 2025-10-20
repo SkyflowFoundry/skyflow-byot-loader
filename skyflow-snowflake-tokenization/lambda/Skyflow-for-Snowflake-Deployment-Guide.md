@@ -12,6 +12,7 @@ Complete step-by-step guide to deploy Skyflow tokenization and detokenization fo
 - [Deployment Steps](#-deployment-steps)
   - [Step 1: Configure AWS CLI](#step-1-configure-aws-cli)
   - [Step 2: Prepare Configuration Files](#step-2-prepare-configuration-files)
+  - [Deployment Mode Selection](#deployment-mode-selection)
   - [Step 3: Create AWS Secrets Manager Secret](#step-3-create-aws-secrets-manager-secret)
   - [Step 4: Create Lambda IAM Role](#step-4-create-lambda-iam-role)
   - [Step 5: Build Lambda Deployment Package](#step-5-build-lambda-deployment-package)
@@ -43,6 +44,7 @@ Complete step-by-step guide to deploy Skyflow tokenization and detokenization fo
 ### Required Tools
 - **Node.js 18+** - [Download](https://nodejs.org/)
 - **AWS CLI** - [Install Guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
+  - **Note:** This guide uses AWS CLI for all deployment steps. If you prefer Infrastructure as Code (IaC), you can adapt these steps to Terraform, CloudFormation, or AWS CDK.
 - **AWS Account** with permissions for Lambda, API Gateway, IAM, Secrets Manager
 - **Snowflake Account** with ACCOUNTADMIN role
 - **Skyflow Account** with vault access and authentication credentials (JWT or API Key)
@@ -195,6 +197,55 @@ Create `skyflow-config.json` with your Skyflow credentials. You can use either *
 - Replace all `YOUR_*` placeholder values with your actual Skyflow configuration
 - The `vaultUrl` should include your cluster ID (e.g., `https://abc123.vault.skyflowapis.com`)
 - Batch sizes and concurrency can be tuned based on your workload (see [Configuration Options](#-configuration-options))
+
+---
+
+### Deployment Mode Selection
+
+This guide covers **Secrets Manager deployment** (recommended for production). There are two deployment modes available:
+
+#### Option 1: Secrets Manager (This Guide) ✅ **Recommended**
+
+**Pros:**
+- Configuration updates without Lambda redeployment
+- Centralized secrets management with audit logging
+- Automatic encryption at rest
+- Supports credential rotation with 5-minute cache refresh
+
+**Cons:**
+- Additional AWS service dependency
+- Minimal cost (~$0.40/month per secret)
+- Requires IAM permissions for Secrets Manager
+
+**Use when:** You need configuration flexibility, credential rotation, or are deploying to production.
+
+#### Option 2: File-Based Configuration
+
+In this mode, `skyflow-config.json` is bundled directly into the Lambda deployment package.
+
+**Pros:**
+- Simpler setup (no Secrets Manager)
+- No additional AWS costs
+- Faster cold starts (no Secrets Manager API call)
+
+**Cons:**
+- Configuration changes require Lambda redeployment
+- Credentials stored in Lambda package (less secure)
+- No centralized secrets management
+
+**Use when:** You're doing development/testing or have a simple deployment with infrequent config changes.
+
+**To deploy with file-based config:**
+```bash
+# Place your config in the lambda directory
+cp skyflow-config.json lambda/
+
+# Run the deployment script with 'config' argument
+cd lambda
+./deploy.sh config
+```
+
+This guide continues with **Secrets Manager deployment**. If you chose file-based, skip to Step 4 after running the deploy script.
 
 ---
 
@@ -775,30 +826,33 @@ This implementation includes several optimizations for improved performance and 
 - Configuration is cached for 5 minutes within each Lambda container
 - Allows Skyflow credential rotation without Lambda restart
 - Automatic reload after cache expiry
+- **Promise-based locking** prevents multiple concurrent config loads during cache expiry
 - Balances freshness with performance
 
-### HTTP/2 Support
-- Connection multiplexing (100 concurrent streams per session)
-- Request pipelining
-- Header compression
-- Improved throughput for batch operations
-
-### Buffer Pooling
-- Reuses buffers across requests
-- Reduced memory allocations
-- Decreased garbage collection pressure
-- Monitor hit rate in logs (target: >80%)
-
-### Adaptive Retry Logic
-- Exponential backoff with jitter (prevents thundering herd)
-- Retry-After header support for 429 rate limiting
+### Secrets Manager Resilience
+- Exponential backoff with jitter for transient AWS errors (prevents thundering herd)
+- Automatic retry for credential-related errors (InvalidSignatureException, ExpiredTokenException)
 - Smart error classification (retryable vs non-retryable)
-- 408 timeout errors are automatically retried
+- 5xx server errors automatically retried (max 3 attempts)
+- These retries ensure AWS infrastructure issues don't disrupt your operations
+
+### Skyflow SDK Integration
+This implementation uses the **official Skyflow Node.js SDK v2.0.0**, which provides enterprise-grade features managed for you:
+
+- **HTTP/2 connection management**: SDK handles connection multiplexing and header compression automatically
+- **Built-in error handling**: Intelligent retry logic for Skyflow API errors
+- **Optimized request batching**: Efficient payload formatting and parsing
+- **Multi-vault support**: Seamlessly routes requests to correct vaults based on data type
+- **Both authentication methods**: Supports JWT (Service Account) and API Key out of the box
+
+These SDK features work transparently—you get the performance benefits without additional configuration.
 
 ### Batch Processing
 - Separate batch sizes for tokenization and detokenization
 - Independent concurrency control for each operation
 - Optimized for different workload patterns
+- **Configurable batching**: Small batches (5) for low-latency tokenization, large batches (300) for high-throughput detokenization
+- **Concurrency control**: Process multiple batches in parallel with configurable limits
 
 ---
 
