@@ -152,6 +152,40 @@ deploy() {
         exit 1
     fi
 
+    # Validate vaultUrl format before proceeding
+    echo -e "${BLUE}Validating skyflow-config.json...${NC}"
+    VAULT_URL=$(jq -r '.vaults.vaultUrl // empty' lambda/skyflow-config.json)
+
+    if [ -z "$VAULT_URL" ]; then
+        echo -e "${RED}✗ Error: vaultUrl is missing in skyflow-config.json${NC}"
+        echo -e "${YELLOW}Expected: .vaults.vaultUrl with format https://<clusterId>.vault.skyflowapis.com${NC}"
+        exit 1
+    fi
+
+    if ! echo "$VAULT_URL" | grep -qE '^https://[^.]+\.vault\.skyflowapis\.com'; then
+        echo -e "${RED}✗ Error: Invalid vaultUrl format: $VAULT_URL${NC}"
+        echo -e "${YELLOW}Expected format: https://<clusterId>.vault.skyflowapis.com${NC}"
+        echo -e "${YELLOW}Example: https://abc123.vault.skyflowapis.com${NC}"
+        exit 1
+    fi
+
+    # Extract and display cluster ID
+    CLUSTER_ID=$(echo "$VAULT_URL" | sed -E 's#^https://([^.]+)\..*#\1#')
+    echo -e "${GREEN}✓ Valid vaultUrl: $VAULT_URL (Cluster: $CLUSTER_ID)${NC}"
+
+    # Validate vault definitions exist
+    VAULT_DEFINITIONS=$(jq '.vaults.definitions // []' lambda/skyflow-config.json)
+    VAULT_COUNT=$(echo "$VAULT_DEFINITIONS" | jq 'length')
+
+    if [ "$VAULT_COUNT" -eq 0 ]; then
+        echo -e "${RED}✗ Error: No vault definitions found in skyflow-config.json${NC}"
+        echo -e "${YELLOW}Expected: .vaults.definitions array with at least one vault${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}✓ Found $VAULT_COUNT vault definition(s)${NC}"
+    echo ""
+
     # Step 1: Create/Update AWS Secrets Manager secret (skip if using config file)
     if [ "$USE_CONFIG_FILE" = true ]; then
         echo -e "${BLUE}[1/8]${NC} Skipping AWS Secrets Manager (using file-based config)..."

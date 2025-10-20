@@ -12,6 +12,7 @@ const SkyflowClient = require('./skyflow-client');
 let skyflowClient = null;
 let config = null;
 let configLoadTime = null;
+let configLoadPromise = null; // Prevents concurrent config loads
 const CONFIG_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
@@ -22,6 +23,9 @@ const CONFIG_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
  * - Cache expired (older than 5 minutes)
  * - Client not initialized
  *
+ * Uses promise locking to prevent race conditions when multiple
+ * concurrent invocations try to reload config simultaneously.
+ *
  * @returns {Promise<SkyflowClient>} Initialized client
  */
 async function getSkyflowClient() {
@@ -29,17 +33,29 @@ async function getSkyflowClient() {
     const configExpired = configLoadTime && (now - configLoadTime > CONFIG_CACHE_TTL_MS);
 
     if (!skyflowClient || !config || configExpired) {
-        if (configExpired) {
-            console.log('Config cache expired, reloading from Secrets Manager');
-        }
+        // Prevent multiple concurrent config loads with promise locking
+        if (!configLoadPromise) {
+            configLoadPromise = (async () => {
+                try {
+                    if (configExpired) {
+                        console.log('Config cache expired, reloading from Secrets Manager');
+                    }
 
-        config = await loadConfig();
-        configLoadTime = now;
-        skyflowClient = new SkyflowClient(config);
-        console.log('Initialized SkyflowClient', {
-            cacheExpired: configExpired,
-            loadTime: new Date(configLoadTime).toISOString()
-        });
+                    config = await loadConfig();
+                    configLoadTime = Date.now();
+                    skyflowClient = new SkyflowClient(config);
+                    console.log('Initialized SkyflowClient', {
+                        cacheExpired: configExpired,
+                        loadTime: new Date(configLoadTime).toISOString()
+                    });
+                    return skyflowClient;
+                } finally {
+                    // Clear promise to allow future reloads
+                    configLoadPromise = null;
+                }
+            })();
+        }
+        return await configLoadPromise;
     }
     return skyflowClient;
 }
