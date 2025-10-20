@@ -7,6 +7,10 @@
 
 const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
 
+// Singleton Secrets Manager client
+// Reused across all config loads to leverage AWS SDK's built-in credential refresh
+let secretsManagerClient = null;
+
 /**
  * Load configuration from AWS Secrets Manager or environment
  *
@@ -78,7 +82,7 @@ async function loadConfig() {
 /**
  * Load configuration from AWS Secrets Manager
  *
- * Creates a fresh client on each call to avoid stale credential issues.
+ * Uses singleton client to leverage AWS SDK's built-in credential refresh.
  * Implements retry logic for transient failures.
  *
  * @returns {Promise<Object>} Configuration object
@@ -87,19 +91,23 @@ async function loadFromSecretsManager() {
     const secretName = process.env.SECRETS_MANAGER_SECRET_NAME;
     const region = process.env.AWS_REGION || 'us-east-1';
 
+    // Initialize singleton client on first use
+    if (!secretsManagerClient) {
+        secretsManagerClient = new SecretsManagerClient({
+            region,
+            maxAttempts: 3
+        });
+        console.log('Initialized singleton Secrets Manager client');
+    }
+
     const maxRetries = 3;
     const baseDelay = 100; // milliseconds
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-            // Create fresh client each time to avoid stale credentials
-            const client = new SecretsManagerClient({
-                region,
-                maxAttempts: 3
-            });
             const command = new GetSecretValueCommand({ SecretId: secretName });
 
-            const data = await client.send(command);
+            const data = await secretsManagerClient.send(command);
             const config = JSON.parse(data.SecretString);
 
             console.log('Configuration loaded from Secrets Manager', {
