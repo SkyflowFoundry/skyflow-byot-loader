@@ -76,7 +76,7 @@ Before starting, gather these values:
 
 ## 🚀 Deployment Steps
 
-### Step 1: Configure AWS CLI
+### Step 1: Configure AWS CLI and Region
 
 ```bash
 # Configure AWS credentials
@@ -85,12 +85,29 @@ aws configure
 # Enter:
 # - AWS Access Key ID
 # - AWS Secret Access Key
-# - Default region (use us-east-1)
+# - Default region (recommend: us-east-1, but any region works)
 # - Default output format (json)
 
 # Verify configuration
 aws sts get-caller-identity
 ```
+
+**Set deployment region** (used throughout this guide):
+
+```bash
+# Set your desired AWS region (default: us-east-1)
+export AWS_REGION=${AWS_REGION:-us-east-1}
+
+echo "Deploying to region: $AWS_REGION"
+```
+
+**Region Considerations:**
+- **us-east-1** (default)
+- **eu-west-1**: Better for European data residency requirements
+- **ap-southeast-1**: Better for Asia-Pacific deployments
+- All AWS regions support Lambda, API Gateway, and Secrets Manager
+
+**Note:** Make sure your Snowflake deployment can reach your chosen AWS region's API Gateway endpoints.
 
 ---
 
@@ -252,23 +269,23 @@ This guide continues with **Secrets Manager deployment**. If you chose file-base
 ### Step 3: Create AWS Secrets Manager Secret
 
 ```bash
-# Create the secret in us-east-1
+# Create the secret in your chosen region
 aws secretsmanager create-secret \
     --name skyflow-tokenization-config \
     --description "Skyflow tokenization configuration" \
     --secret-string file://skyflow-config.json \
-    --region us-east-1
+    --region ${AWS_REGION}
 
 # Verify secret was created
 aws secretsmanager describe-secret \
     --secret-id skyflow-tokenization-config \
-    --region us-east-1
+    --region ${AWS_REGION}
 ```
 
 **Expected output:**
 ```json
 {
-    "ARN": "arn:aws:secretsmanager:us-east-1:YOUR_ACCOUNT:secret:skyflow-tokenization-config-XXXXXX",
+    "ARN": "arn:aws:secretsmanager:${AWS_REGION}:YOUR_ACCOUNT:secret:skyflow-tokenization-config-XXXXXX",
     "Name": "skyflow-tokenization-config",
     "Description": "Skyflow tokenization configuration",
     ...
@@ -301,9 +318,8 @@ Create `lambda-trust-policy.json`:
 **4.2 Create the role**
 
 ```bash
-# Replace YOUR_ACCOUNT_ID with your AWS account ID
+# Get your AWS account ID (AWS_REGION already set in Step 1)
 export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-export AWS_REGION=us-east-1
 
 # Create IAM role
 aws iam create-role \
@@ -330,11 +346,13 @@ Create `secrets-manager-policy.json`:
       "Action": [
         "secretsmanager:GetSecretValue"
       ],
-      "Resource": "arn:aws:secretsmanager:us-east-1:*:secret:skyflow-tokenization-config-*"
+      "Resource": "arn:aws:secretsmanager:*:*:secret:skyflow-tokenization-config-*"
     }
   ]
 }
 ```
+
+**Note:** Using `*` for region allows the Lambda to work if you move it to another region later. You can restrict to your specific region for tighter security: `arn:aws:secretsmanager:${AWS_REGION}:...`
 
 ```bash
 # Attach Secrets Manager policy
@@ -610,13 +628,13 @@ Create `api-invoke-policy.json`:
     {
       "Effect": "Allow",
       "Action": "execute-api:Invoke",
-      "Resource": "arn:aws:execute-api:us-east-1:YOUR_ACCOUNT_ID:YOUR_API_ID/*"
+      "Resource": "arn:aws:execute-api:YOUR_REGION:YOUR_ACCOUNT_ID:YOUR_API_ID/*"
     }
   ]
 }
 ```
 
-Replace `YOUR_ACCOUNT_ID` and `YOUR_API_ID`, then:
+Replace `YOUR_REGION`, `YOUR_ACCOUNT_ID`, and `YOUR_API_ID` with your values, then:
 
 ```bash
 # Attach policy to role
@@ -649,7 +667,7 @@ CREATE OR REPLACE API INTEGRATION skyflow_api_integration
     API_PROVIDER = aws_api_gateway
     API_AWS_ROLE_ARN = 'arn:aws:iam::YOUR_ACCOUNT_ID:role/SnowflakeAPIRole'
     ENABLED = TRUE
-    API_ALLOWED_PREFIXES = ('https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/');
+    API_ALLOWED_PREFIXES = ('https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/');
 
 -- Get trust policy values
 DESC API INTEGRATION skyflow_api_integration;
@@ -704,43 +722,43 @@ USE SCHEMA YOUR_SCHEMA;
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_NAME(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/prod/tokenize/name';
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/tokenize/name';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_ID(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/prod/tokenize/id';
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/tokenize/id';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_DOB(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/prod/tokenize/dob';
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/tokenize/dob';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_SSN(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/prod/tokenize/ssn';
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/tokenize/ssn';
 
 -- Detokenization functions
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_NAME(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/prod/detokenize/name';
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/detokenize/name';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_ID(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/prod/detokenize/id';
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/detokenize/id';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_DOB(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/prod/detokenize/dob';
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/detokenize/dob';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_SSN(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/prod/detokenize/ssn';
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/detokenize/ssn';
 
 -- Verify functions were created
 SHOW FUNCTIONS LIKE 'TOK_%';
@@ -758,7 +776,7 @@ SHOW FUNCTIONS LIKE 'DETOK_%';
 aws lambda invoke \
     --function-name skyflow-tokenization \
     --payload '{"path":"/tokenize/name","body":"{\"data\":[[0,\"John Doe\"]]}"}' \
-    --region us-east-1 \
+    --region ${AWS_REGION} \
     response.json
 
 cat response.json
@@ -797,7 +815,7 @@ LIMIT 100;
 ```bash
 # View Lambda logs
 aws logs tail /aws/lambda/skyflow-tokenization \
-    --region us-east-1 \
+    --region ${AWS_REGION} \
     --follow
 
 # Look for:
@@ -896,7 +914,7 @@ To update configuration:
 aws secretsmanager update-secret \
     --secret-id skyflow-tokenization-config \
     --secret-string file://skyflow-config.json \
-    --region us-east-1
+    --region ${AWS_REGION}
 
 # Changes will be applied within 5 minutes (cache TTL)
 ```
@@ -914,7 +932,7 @@ aws secretsmanager update-secret \
 # Check Lambda environment variables
 aws lambda get-function-configuration \
     --function-name skyflow-tokenization \
-    --region us-east-1 \
+    --region ${AWS_REGION} \
     --query 'Environment.Variables'
 
 # Should show:
@@ -925,7 +943,7 @@ aws lambda get-function-configuration \
 # If missing, set it:
 aws lambda update-function-configuration \
     --function-name skyflow-tokenization \
-    --region us-east-1 \
+    --region ${AWS_REGION} \
     --environment Variables="{SECRETS_MANAGER_SECRET_NAME=skyflow-tokenization-config}"
 ```
 
@@ -951,7 +969,7 @@ aws iam get-role-policy \
 # View secret structure (be careful - shows sensitive data)
 aws secretsmanager get-secret-value \
     --secret-id skyflow-tokenization-config \
-    --region us-east-1 \
+    --region ${AWS_REGION} \
     --query 'SecretString' \
     --output text | jq '.credentials'
 
@@ -980,7 +998,7 @@ aws secretsmanager get-secret-value \
 # Check Lambda permissions
 aws lambda get-policy \
     --function-name skyflow-tokenization \
-    --region us-east-1 \
+    --region ${AWS_REGION} \
     --query 'Policy' \
     --output text | jq .
 ```
@@ -1005,7 +1023,7 @@ aws iam get-role \
 3. If error persists, check CloudWatch logs for more context:
 ```bash
 aws logs tail /aws/lambda/skyflow-tokenization \
-    --region us-east-1 \
+    --region ${AWS_REGION} \
     --follow
 ```
 
@@ -1032,7 +1050,7 @@ Then update the secret:
 aws secretsmanager update-secret \
     --secret-id skyflow-tokenization-config \
     --secret-string file://skyflow-config.json \
-    --region us-east-1
+    --region ${AWS_REGION}
 ```
 
 Wait up to 5 minutes for the cache to refresh, then test again.
@@ -1052,7 +1070,7 @@ zip -r function.zip config.js skyflow-client.js handler.js package.json node_mod
 aws lambda update-function-code \
     --function-name skyflow-tokenization \
     --zip-file fileb://function.zip \
-    --region us-east-1
+    --region ${AWS_REGION}
 ```
 
 ---
@@ -1065,12 +1083,12 @@ To remove all resources:
 # Delete Lambda function
 aws lambda delete-function \
     --function-name skyflow-tokenization \
-    --region us-east-1
+    --region ${AWS_REGION}
 
 # Delete API Gateway
 aws apigateway delete-rest-api \
     --rest-api-id ${API_ID} \
-    --region us-east-1
+    --region ${AWS_REGION}
 
 # Delete IAM roles
 aws iam delete-role-policy \
@@ -1095,7 +1113,7 @@ aws iam delete-role \
 aws secretsmanager delete-secret \
     --secret-id skyflow-tokenization-config \
     --force-delete-without-recovery \
-    --region us-east-1
+    --region ${AWS_REGION}
 
 # In Snowflake:
 DROP FUNCTION IF EXISTS TOK_NAME(VARCHAR);
@@ -1115,7 +1133,7 @@ DROP API INTEGRATION IF EXISTS skyflow_api_integration;
 
 For issues or questions:
 
-1. Check CloudWatch logs: `aws logs tail /aws/lambda/skyflow-tokenization --region us-east-1 --follow`
+1. Check CloudWatch logs: `aws logs tail /aws/lambda/skyflow-tokenization --region ${AWS_REGION} --follow`
 2. Review this troubleshooting section
 3. Check Snowflake query history for error messages
 4. Contact Skyflow support with CloudWatch log excerpts

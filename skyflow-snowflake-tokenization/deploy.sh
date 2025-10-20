@@ -6,8 +6,11 @@
 # Deploys Lambda function and API Gateway using AWS CLI
 #
 # Usage:
-#   ./deploy.sh --deploy    Deploy all resources
-#   ./deploy.sh --destroy   Destroy all resources
+#   ./deploy.sh --deploy [--region REGION]    Deploy all resources
+#   ./deploy.sh --destroy                     Destroy all resources
+#
+# Options:
+#   --region REGION    AWS region to deploy to (default: from config.json or us-east-1)
 # ============================================================================
 
 set -e  # Exit on error
@@ -18,6 +21,17 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+
+# Parse --region flag early (before loading config)
+REGION_OVERRIDE=""
+for arg in "$@"; do
+    if [[ "$arg" == "--region" ]]; then
+        REGION_FLAG_FOUND=true
+    elif [[ "$REGION_FLAG_FOUND" == "true" ]]; then
+        REGION_OVERRIDE="$arg"
+        break
+    fi
+done
 
 # Configuration
 PROJECT_NAME="skyflow-tokenization"
@@ -37,7 +51,14 @@ fi
 # Extract AWS credentials from config
 AWS_ACCESS_KEY_ID=$(jq -r '.aws.AWS_S3_KEY_ID' "$CONFIG_FILE")
 AWS_SECRET_ACCESS_KEY=$(jq -r '.aws.AWS_S3_SECRET_ACCESS_KEY' "$CONFIG_FILE")
-AWS_REGION=$(jq -r '.aws.AWS_DEFAULT_REGION // "us-east-1"' "$CONFIG_FILE")
+
+# Set AWS region with priority: CLI flag > config file > default
+if [ -n "$REGION_OVERRIDE" ]; then
+    AWS_REGION="$REGION_OVERRIDE"
+    echo -e "${BLUE}Using region from --region flag: ${GREEN}${AWS_REGION}${NC}"
+else
+    AWS_REGION=$(jq -r '.aws.AWS_DEFAULT_REGION // "us-east-1"' "$CONFIG_FILE")
+fi
 
 # Extract Skyflow configuration
 SKYFLOW_VAULT_URL=$(jq -r '.skyflow.vault_url' "$CONFIG_FILE")
@@ -1559,6 +1580,9 @@ case "${1}" in
         echo "  --setup-snowflake [options]          Setup Snowflake integration"
         echo "  --test                               Test Snowflake integration"
         echo ""
+        echo "Global options:"
+        echo "  --region <region>                    AWS region to deploy to (default: from config.json or us-east-1)"
+        echo ""
         echo "Options for *-e2e and setup-snowflake commands:"
         echo "  --database <name>                    Override database from config.json"
         echo "  --schema <name>                      Override schema from config.json"
@@ -1592,6 +1616,11 @@ case "${1}" in
         echo "  $0 --deploy-e2e --database MY_DB --schema MY_SCHEMA"
         echo "  $0 --redeploy"
         echo "  $0 --redeploy-e2e"
+        echo ""
+        echo "  # Region override"
+        echo "  $0 --deploy --region us-west-2"
+        echo "  $0 --deploy-e2e --region eu-west-1"
+        echo "  $0 --deploy-secrets --region ap-southeast-1"
         echo ""
         echo "  # Secrets Manager (production)"
         echo "  $0 --deploy-secrets"
