@@ -45,15 +45,17 @@ Complete step-by-step guide to deploy Skyflow tokenization and detokenization fo
 - **AWS CLI** - [Install Guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 - **AWS Account** with permissions for Lambda, API Gateway, IAM, Secrets Manager
 - **Snowflake Account** with ACCOUNTADMIN role
-- **Skyflow Account** with vault access and bearer token
+- **Skyflow Account** with vault access and authentication credentials (JWT or API Key)
 
 ### Required Information
 
 Before starting, gather these values:
 
 **From Skyflow:**
-- Vault URL (e.g., `https://your-vault.vault.skyflowapis.com`)
-- Bearer Token (service account token)
+- Vault URL (e.g., `https://your-cluster-id.vault.skyflowapis.com`)
+- **Authentication credentials** (choose one):
+  - **JWT (Service Account)**: Client ID, private key, token URI, key ID (recommended)
+  - **API Key**: Bearer token
 - Vault IDs for each data type (NAME, ID, DOB, SSN)
 - Table and column names for each data type
 
@@ -92,44 +94,107 @@ aws sts get-caller-identity
 
 ### Step 2: Prepare Configuration Files
 
-**2.1 Create Secrets Manager configuration file**
+**2.1 Create configuration file**
 
-Create `secrets-config.json` with your Skyflow credentials:
+Create `skyflow-config.json` with your Skyflow credentials. You can use either **JWT (Service Account)** or **API Key** authentication. The system will auto-detect which credentials are present (JWT is checked first).
+
+**Option A: JWT (Service Account) Authentication** (recommended)
 
 ```json
 {
-  "vault_url": "https://your-vault.vault.skyflowapis.com",
-  "bearer_token": "your-skyflow-bearer-token",
-  "batch_size": 100,
-  "max_concurrency": 20,
-  "max_retries": 3,
-  "retry_delay_ms": 1000,
-  "data_type_mappings": {
-    "NAME": {
-      "vault_id": "vault-id-for-names",
-      "table": "persons",
-      "column": "name"
-    },
-    "ID": {
-      "vault_id": "vault-id-for-ids",
-      "table": "persons",
-      "column": "person_id"
-    },
-    "DOB": {
-      "vault_id": "vault-id-for-dobs",
-      "table": "persons",
-      "column": "date_of_birth"
-    },
-    "SSN": {
-      "vault_id": "vault-id-for-ssns",
-      "table": "persons",
-      "column": "ssn"
-    }
-  }
+  "credentials": {
+    "clientID": "YOUR_CLIENT_ID",
+    "clientName": "YOUR_SERVICE_ACCOUNT_NAME",
+    "tokenURI": "https://manage.skyflowapis.com/v1/auth/sa/oauth/token",
+    "keyID": "YOUR_KEY_ID",
+    "privateKey": "-----BEGIN PRIVATE KEY-----\nYOUR_PRIVATE_KEY_HERE\n-----END PRIVATE KEY-----\n",
+    "keyAlgorithm": "KEY_ALG_RSA_2048"
+  },
+  "vaults": {
+    "vaultUrl": "https://YOUR_CLUSTER_ID.vault.skyflowapis.com",
+    "definitions": [
+      {
+        "vaultId": "YOUR_VAULT_ID_FOR_NAMES",
+        "table": "persons",
+        "column": "name",
+        "dataType": "NAME"
+      },
+      {
+        "vaultId": "YOUR_VAULT_ID_FOR_IDS",
+        "table": "persons",
+        "column": "person_id",
+        "dataType": "ID"
+      },
+      {
+        "vaultId": "YOUR_VAULT_ID_FOR_DOBS",
+        "table": "persons",
+        "column": "date_of_birth",
+        "dataType": "DOB"
+      },
+      {
+        "vaultId": "YOUR_VAULT_ID_FOR_SSNS",
+        "table": "persons",
+        "column": "ssn",
+        "dataType": "SSN"
+      }
+    ]
+  },
+  "tokenizeBatchSize": 5,
+  "tokenizeMaxConcurrency": 400,
+  "detokenizeBatchSize": 300,
+  "detokenizeMaxConcurrency": 400,
+  "logLevel": "INFO"
 }
 ```
 
-**Note:** Replace all placeholder values with your actual Skyflow configuration.
+**Option B: API Key Authentication**
+
+```json
+{
+  "credentials": {
+    "apiKey": "YOUR_SKYFLOW_API_KEY_HERE"
+  },
+  "vaults": {
+    "vaultUrl": "https://YOUR_CLUSTER_ID.vault.skyflowapis.com",
+    "definitions": [
+      {
+        "vaultId": "YOUR_VAULT_ID_FOR_NAMES",
+        "table": "persons",
+        "column": "name",
+        "dataType": "NAME"
+      },
+      {
+        "vaultId": "YOUR_VAULT_ID_FOR_IDS",
+        "table": "persons",
+        "column": "person_id",
+        "dataType": "ID"
+      },
+      {
+        "vaultId": "YOUR_VAULT_ID_FOR_DOBS",
+        "table": "persons",
+        "column": "date_of_birth",
+        "dataType": "DOB"
+      },
+      {
+        "vaultId": "YOUR_VAULT_ID_FOR_SSNS",
+        "table": "persons",
+        "column": "ssn",
+        "dataType": "SSN"
+      }
+    ]
+  },
+  "tokenizeBatchSize": 5,
+  "tokenizeMaxConcurrency": 400,
+  "detokenizeBatchSize": 300,
+  "detokenizeMaxConcurrency": 400,
+  "logLevel": "INFO"
+}
+```
+
+**Configuration Notes:**
+- Replace all `YOUR_*` placeholder values with your actual Skyflow configuration
+- The `vaultUrl` should include your cluster ID (e.g., `https://abc123.vault.skyflowapis.com`)
+- Batch sizes and concurrency can be tuned based on your workload (see [Configuration Options](#-configuration-options))
 
 ---
 
@@ -140,7 +205,7 @@ Create `secrets-config.json` with your Skyflow credentials:
 aws secretsmanager create-secret \
     --name skyflow-tokenization-config \
     --description "Skyflow tokenization configuration" \
-    --secret-string file://secrets-config.json \
+    --secret-string file://skyflow-config.json \
     --region us-east-1
 
 # Verify secret was created
@@ -269,7 +334,7 @@ aws lambda create-function \
     --timeout 60 \
     --memory-size 256 \
     --description "Skyflow tokenization and detokenization for Snowflake" \
-    --environment Variables="{USE_SECRETS_MANAGER=true,SECRET_NAME=skyflow-tokenization-config}" \
+    --environment Variables="{SECRETS_MANAGER_SECRET_NAME=skyflow-tokenization-config}" \
     --region ${AWS_REGION}
 
 # Verify Lambda was created
@@ -685,28 +750,43 @@ aws logs tail /aws/lambda/skyflow-tokenization \
     --follow
 
 # Look for:
-# - "Loading configuration from AWS Secrets Manager"
-# - "SkyflowClient initialized with optimizations"
-# - "http2: true, bufferPooling: true"
-# - "Buffer pool stats: {hits: X, misses: Y}"
+# - "Loading configuration..."
+# - "Loading from AWS Secrets Manager: skyflow-tokenization-config"
+# - "Initialized singleton Secrets Manager client" (first invocation only)
+# - "Configuration loaded from Secrets Manager"
+# - "Credentials type: Service Account (JWT)" or "Credentials type: API Key"
+# - "Configuration validated successfully"
+# - "Config cache expired, reloading from Secrets Manager" (after 5 minutes)
 ```
 
 ---
 
 ## 📊 Performance Features
 
-This implementation includes several optimizations:
+This implementation includes several optimizations for improved performance and reliability:
+
+### AWS Credential Management
+- **Singleton Secrets Manager client**: Creates a single AWS Secrets Manager client per Lambda container
+- Leverages AWS SDK's built-in credential refresh mechanisms
+- Prevents race conditions during AWS IAM credential rotation
+- Reduces API calls and improves cold start performance
+
+### Configuration Caching with TTL
+- Configuration is cached for 5 minutes within each Lambda container
+- Allows Skyflow credential rotation without Lambda restart
+- Automatic reload after cache expiry
+- Balances freshness with performance
 
 ### HTTP/2 Support
 - Connection multiplexing (100 concurrent streams per session)
 - Request pipelining
 - Header compression
-- **20-30% faster** than HTTP/1.1
+- Improved throughput for batch operations
 
 ### Buffer Pooling
 - Reuses buffers across requests
-- **30-50% fewer allocations**
-- Reduced garbage collection pressure
+- Reduced memory allocations
+- Decreased garbage collection pressure
 - Monitor hit rate in logs (target: >80%)
 
 ### Adaptive Retry Logic
@@ -715,43 +795,56 @@ This implementation includes several optimizations:
 - Smart error classification (retryable vs non-retryable)
 - 408 timeout errors are automatically retried
 
-### Worker Pool Pattern
-- Fixed pool of concurrent requests (configurable via `max_concurrency`)
-- Eliminates goroutine creation overhead
-- Better CPU cache locality
-
-**Expected Performance:** 40-60% faster than baseline implementation
+### Batch Processing
+- Separate batch sizes for tokenization and detokenization
+- Independent concurrency control for each operation
+- Optimized for different workload patterns
 
 ---
 
 ## 🔧 Configuration Options
 
-You can adjust performance settings in the Secrets Manager configuration:
+You can adjust performance settings in the Secrets Manager configuration. The Lambda function supports separate batch sizes and concurrency limits for tokenization and detokenization operations:
 
 ```json
 {
-  "batch_size": 100,
-  "max_concurrency": 20,
-  "max_retries": 3,
-  "retry_delay_ms": 1000
+  "credentials": { ... },
+  "vaults": { ... },
+  "tokenizeBatchSize": 5,
+  "tokenizeMaxConcurrency": 400,
+  "detokenizeBatchSize": 300,
+  "detokenizeMaxConcurrency": 400,
+  "logLevel": "INFO"
 }
 ```
 
+**Configuration Parameters:**
+
+- `tokenizeBatchSize`: Number of records to tokenize per batch (default: 5)
+- `tokenizeMaxConcurrency`: Maximum concurrent tokenization batches (default: 400)
+- `detokenizeBatchSize`: Number of records to detokenize per batch (default: 300)
+- `detokenizeMaxConcurrency`: Maximum concurrent detokenization batches (default: 400)
+- `logLevel`: Logging verbosity - `INFO`, `DEBUG`, or `ERROR` (default: INFO)
+
 **Tuning Guidelines:**
-- **Low latency:** `batch_size=50`, `max_concurrency=30`
-- **High throughput:** `batch_size=100`, `max_concurrency=20`
-- **Rate limit sensitive:** `batch_size=100`, `max_concurrency=10`
+
+- **Low latency tokenization:** Smaller batch size (5-10), higher concurrency (400-500)
+- **High throughput detokenization:** Larger batch size (300-500), higher concurrency (300-400)
+- **Rate limit sensitive:** Lower concurrency (100-200) for both operations
+- **Balanced workload:** Default values work well for most use cases
+
+**Note:** Configuration changes are picked up within 5 minutes due to the cache TTL. No Lambda redeployment is needed.
 
 To update configuration:
 
 ```bash
-# Update secret
+# Update your local skyflow-config.json file, then:
 aws secretsmanager update-secret \
     --secret-id skyflow-tokenization-config \
-    --secret-string file://secrets-config.json \
+    --secret-string file://skyflow-config.json \
     --region us-east-1
 
-# Lambda will pick up changes on next invocation (no redeployment needed)
+# Changes will be applied within 5 minutes (cache TTL)
 ```
 
 ---
@@ -760,7 +853,7 @@ aws secretsmanager update-secret \
 
 ### Lambda Can't Read Secret
 
-**Error:** `vault_url is required in configuration`
+**Error:** `Missing vaultUrl in vaults configuration` or `Failed to load configuration from Secrets Manager`
 
 **Solution:**
 ```bash
@@ -772,15 +865,14 @@ aws lambda get-function-configuration \
 
 # Should show:
 # {
-#     "USE_SECRETS_MANAGER": "true",
-#     "SECRET_NAME": "skyflow-tokenization-config"
+#     "SECRETS_MANAGER_SECRET_NAME": "skyflow-tokenization-config"
 # }
 
-# If missing, set them:
+# If missing, set it:
 aws lambda update-function-configuration \
     --function-name skyflow-tokenization \
     --region us-east-1 \
-    --environment Variables="{USE_SECRETS_MANAGER=true,SECRET_NAME=skyflow-tokenization-config}"
+    --environment Variables="{SECRETS_MANAGER_SECRET_NAME=skyflow-tokenization-config}"
 ```
 
 ### Permission Denied
@@ -797,17 +889,26 @@ aws iam get-role-policy \
 
 ### HTTP 401 Unauthorized
 
-**Error:** `HTTP 401: Unauthorized`
+**Error:** `HTTP 401: Unauthorized` or authentication failures
 
-**Solution:** Check bearer token is valid in Secrets Manager:
+**Solution:** Verify your Skyflow credentials are valid in Secrets Manager:
 
 ```bash
-# View secret (be careful - shows sensitive data)
+# View secret structure (be careful - shows sensitive data)
 aws secretsmanager get-secret-value \
     --secret-id skyflow-tokenization-config \
     --region us-east-1 \
     --query 'SecretString' \
-    --output text | jq .bearer_token
+    --output text | jq '.credentials'
+
+# For JWT authentication, check:
+# - clientID and privateKey are present
+# - privateKey format is correct (PEM format with \n line breaks)
+# - Service account has not been deleted or disabled in Skyflow
+
+# For API Key authentication, check:
+# - apiKey is present and valid
+# - API key has not been revoked in Skyflow
 ```
 
 ### Snowflake Functions Not Working
@@ -830,18 +931,57 @@ aws lambda get-policy \
     --output text | jq .
 ```
 
+### Invalid Security Token
+
+**Error:** `The security token included in the request is invalid` when accessing Secrets Manager
+
+**Cause:** This error typically occurs during AWS IAM credential rotation. The implementation uses a singleton Secrets Manager client that works with AWS SDK's credential refresh to prevent this issue.
+
+**Solution:**
+
+1. Check Lambda execution role has correct permissions:
+```bash
+aws iam get-role \
+    --role-name skyflow-tokenization-lambda-role \
+    --query 'Role.Arn'
+```
+
+2. Verify the role hasn't been deleted or policies detached
+
+3. If error persists, check CloudWatch logs for more context:
+```bash
+aws logs tail /aws/lambda/skyflow-tokenization \
+    --region us-east-1 \
+    --follow
+```
+
+The singleton client pattern should prevent most occurrences of this error by allowing AWS SDK to manage credential lifecycle.
+
 ### High Latency
 
-**Solution:** Adjust performance settings in secrets-config.json:
+**Solution:** Adjust performance settings in `skyflow-config.json`:
 
 ```json
 {
-  "batch_size": 50,
-  "max_concurrency": 30
+  "credentials": { ... },
+  "vaults": { ... },
+  "tokenizeBatchSize": 10,
+  "tokenizeMaxConcurrency": 500,
+  "detokenizeBatchSize": 300,
+  "detokenizeMaxConcurrency": 400
 }
 ```
 
-Then update the secret and test again.
+Then update the secret:
+
+```bash
+aws secretsmanager update-secret \
+    --secret-id skyflow-tokenization-config \
+    --secret-string file://skyflow-config.json \
+    --region us-east-1
+```
+
+Wait up to 5 minutes for the cache to refresh, then test again.
 
 ---
 
@@ -939,4 +1079,4 @@ For issues or questions:
 
 **Deployment complete!** 🎉
 
-Your Skyflow tokenization is now integrated with Snowflake using a high-performance Node.js Lambda function with HTTP/2, buffer pooling, and adaptive retry logic.
+Your Skyflow tokenization is now integrated with Snowflake using a Node.js Lambda function with performance optimizations including singleton client management, configuration caching, HTTP/2 support, buffer pooling, and adaptive retry logic.
