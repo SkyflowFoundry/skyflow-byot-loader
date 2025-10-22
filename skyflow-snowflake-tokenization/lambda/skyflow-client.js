@@ -29,6 +29,11 @@ class SkyflowClient {
         // Store service account credentials for token generation
         this.serviceAccountCreds = this.isJwtAuth ? JSON.stringify(config.credentials) : null;
 
+        // Cache for context-aware clients (JWT with context field)
+        // Key format: "dataType:username"
+        // Relies on Lambda container recycling for natural cleanup
+        this.contextClientCache = new Map();
+
         // Separate batch size and concurrency for tokenize vs detokenize
         this.TOKENIZE_BATCH_SIZE = config.tokenizeBatchSize;
         this.TOKENIZE_MAX_CONCURRENCY = config.tokenizeMaxConcurrency;
@@ -116,7 +121,13 @@ class SkyflowClient {
             return this.skyflowClients[dataType];
         }
 
-        // For JWT auth with context, create client with context field
+        // For JWT auth with context, check cache first
+        const cacheKey = `${dataType}:${ctx}`;
+        if (this.contextClientCache.has(cacheKey)) {
+            return this.contextClientCache.get(cacheKey);
+        }
+
+        // Cache miss - create new client with context field
         const vault = this.vaultsByDataType[dataType];
         if (!vault) {
             throw new Error(`No vault configured for data type: ${dataType}`);
@@ -148,7 +159,13 @@ class SkyflowClient {
             logLevel: logLevelMap[this.config.logLevel] || LogLevel.INFO
         };
 
-        return new Skyflow(skyflowConfig);
+        const client = new Skyflow(skyflowConfig);
+
+        // Store in cache for reuse
+        this.contextClientCache.set(cacheKey, client);
+        console.log(`Created and cached context-aware client for ${dataType}:${ctx} (cache size: ${this.contextClientCache.size})`);
+
+        return client;
     }
 
     /**
