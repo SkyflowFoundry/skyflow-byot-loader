@@ -136,25 +136,48 @@ Create `skyflow-config.json` with your Skyflow credentials. You can use either *
         "vaultId": "YOUR_VAULT_ID_FOR_NAMES",
         "table": "persons",
         "column": "name",
-        "dataType": "NAME"
+        "dataType": "NAME",
+        "transformations": {
+          "uppercase": true,
+          "minLength": 3,
+          "stripPunctuation": true
+        }
       },
       {
         "vaultId": "YOUR_VAULT_ID_FOR_IDS",
         "table": "persons",
         "column": "person_id",
-        "dataType": "ID"
+        "dataType": "ID",
+        "transformations": {
+          "uppercase": true,
+          "minLength": 3,
+          "stripPunctuation": true
+        }
       },
       {
         "vaultId": "YOUR_VAULT_ID_FOR_DOBS",
         "table": "persons",
         "column": "date_of_birth",
-        "dataType": "DOB"
+        "dataType": "DOB",
+        "transformations": {
+          "uppercase": false,
+          "stripPunctuation": true,
+          "validation": {
+            "minDate": "0600-01-01",
+            "maxDate": "3337-11-27"
+          }
+        }
       },
       {
         "vaultId": "YOUR_VAULT_ID_FOR_SSNS",
         "table": "persons",
         "column": "ssn",
-        "dataType": "SSN"
+        "dataType": "SSN",
+        "transformations": {
+          "uppercase": false,
+          "minLength": 3,
+          "stripPunctuation": true
+        }
       }
     ]
   },
@@ -180,25 +203,48 @@ Create `skyflow-config.json` with your Skyflow credentials. You can use either *
         "vaultId": "YOUR_VAULT_ID_FOR_NAMES",
         "table": "persons",
         "column": "name",
-        "dataType": "NAME"
+        "dataType": "NAME",
+        "transformations": {
+          "uppercase": true,
+          "minLength": 3,
+          "stripPunctuation": true
+        }
       },
       {
         "vaultId": "YOUR_VAULT_ID_FOR_IDS",
         "table": "persons",
         "column": "person_id",
-        "dataType": "ID"
+        "dataType": "ID",
+        "transformations": {
+          "uppercase": true,
+          "minLength": 3,
+          "stripPunctuation": true
+        }
       },
       {
         "vaultId": "YOUR_VAULT_ID_FOR_DOBS",
         "table": "persons",
         "column": "date_of_birth",
-        "dataType": "DOB"
+        "dataType": "DOB",
+        "transformations": {
+          "uppercase": false,
+          "stripPunctuation": true,
+          "validation": {
+            "minDate": "0600-01-01",
+            "maxDate": "3337-11-27"
+          }
+        }
       },
       {
         "vaultId": "YOUR_VAULT_ID_FOR_SSNS",
         "table": "persons",
         "column": "ssn",
-        "dataType": "SSN"
+        "dataType": "SSN",
+        "transformations": {
+          "uppercase": false,
+          "minLength": 3,
+          "stripPunctuation": true
+        }
       }
     ]
   },
@@ -876,7 +922,64 @@ These SDK features work transparently—you get the performance benefits without
 
 ## 🔧 Configuration Options
 
-You can adjust performance settings in the Secrets Manager configuration. The Lambda function supports separate batch sizes and concurrency limits for tokenization and detokenization operations:
+### Data Transformations
+
+The Lambda function supports Protegrity-compatible data transformations that are applied before tokenization. Each vault definition can specify transformation rules:
+
+```json
+{
+  "vaultId": "YOUR_VAULT_ID",
+  "table": "persons",
+  "column": "name",
+  "dataType": "NAME",
+  "transformations": {
+    "uppercase": true,
+    "minLength": 3,
+    "stripPunctuation": true
+  }
+}
+```
+
+**Transformation Rules by Data Type:**
+
+| Data Type | Uppercase | Strip Punctuation | Min Length | Validation |
+|-----------|-----------|-------------------|------------|------------|
+| **NAME**  | ✅ Yes     | ✅ Yes             | 3 chars    | None       |
+| **ID**    | ✅ Yes     | ✅ Yes             | 3 chars    | None       |
+| **DOB**   | ❌ No      | ✅ Yes             | None       | Date range: 0600-01-01 to 3337-11-27 |
+| **SSN**   | ❌ No      | ✅ Yes             | 3 chars    | None       |
+
+**How Transformations Work:**
+
+1. **Strip Punctuation** - Removes all non-alphanumeric characters (except spaces) before tokenization
+   - Example: "O'Brien" → "OBrien"
+   - Example: "123-45-6789" → "123456789"
+
+2. **Min Length Check** - Values with fewer than the specified alphanumeric characters skip tokenization
+   - Only alphanumeric characters count toward length (punctuation is ignored)
+   - Short values return the **original input** unchanged (not uppercased)
+   - Example: "Jo" (2 chars) → "Jo" (original value returned)
+   - Example: "N/A" (2 chars after stripping) → "N/A" (original value returned)
+
+3. **Uppercase** - Converts to uppercase before tokenization (NAME and ID only)
+   - Ensures consistent tokens: "abc", "Abc", "ABC" all produce the same token
+   - Example: "john doe" → "JOHN DOE" → token
+   - **Not applied to short values** that skip tokenization
+
+4. **DOB Validation** - Validates date is within acceptable range (DOB only)
+   - Dates outside range: return original value unchanged
+   - Invalid date formats: return original value unchanged
+
+**Processing Order:**
+1. Validate date range (DOB only, must happen before stripping punctuation)
+2. Strip punctuation (if enabled)
+3. Check minimum length (if specified) - if too short, return original and skip tokenization
+4. Apply uppercase (if enabled)
+5. Tokenize processed value
+
+### Performance Settings
+
+You can adjust batch sizes and concurrency limits in the Secrets Manager configuration:
 
 ```json
 {

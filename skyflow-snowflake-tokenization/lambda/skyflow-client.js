@@ -2,6 +2,7 @@
  * Skyflow SDK Client Wrapper
  *
  * Handles tokenization and detokenization using official Skyflow Node.js SDK v2.0.0
+ * Supports context-aware authorization via SDK's built-in context field
  */
 
 const { Skyflow, LogLevel, RedactionType, InsertRequest, InsertOptions, DetokenizeRequest, DetokenizeOptions } = require('skyflow-node');
@@ -21,6 +22,12 @@ class SkyflowClient {
     constructor(config) {
         this.config = config;
         this.vaultsByDataType = config.vaultsByDataType;
+
+        // Detect auth type - ctx field only supported with JWT/Service Account auth
+        this.isJwtAuth = !config.credentials.apiKey;
+
+        // Store service account credentials for token generation
+        this.serviceAccountCreds = this.isJwtAuth ? JSON.stringify(config.credentials) : null;
 
         // Separate batch size and concurrency for tokenize vs detokenize
         this.TOKENIZE_BATCH_SIZE = config.tokenizeBatchSize;
@@ -89,11 +96,181 @@ class SkyflowClient {
     }
 
     /**
+     * Get or create SDK client for a specific data type and context
+     * For JWT auth with context: creates client with context in credentials
+     * For API key auth: returns existing client (no context support)
+     *
+     * @param {string} dataType - Data type (NAME, SSN, etc.)
+     * @param {string} ctx - Optional Snowflake username for context
+     * @returns {Promise<Skyflow>} SDK client instance
+     * @private
+     */
+    async _getClientForContext(dataType, ctx) {
+        // For API key auth, use existing client (no context support)
+        if (!this.isJwtAuth) {
+            return this.skyflowClients[dataType];
+        }
+
+        // For JWT auth without context, use existing client
+        if (!ctx) {
+            return this.skyflowClients[dataType];
+        }
+
+        // For JWT auth with context, create client with context field
+        const vault = this.vaultsByDataType[dataType];
+        if (!vault) {
+            throw new Error(`No vault configured for data type: ${dataType}`);
+        }
+
+        // Map log level
+        const logLevelMap = {
+            'ERROR': LogLevel.ERROR,
+            'WARN': LogLevel.WARN,
+            'INFO': LogLevel.INFO,
+            'DEBUG': LogLevel.DEBUG
+        };
+
+        // Create credentials with context field (SDK v2 feature)
+        const credentials = {
+            credentialsString: this.serviceAccountCreds,
+            context: ctx
+        };
+
+        const vaultConfig = {
+            vaultId: vault.vaultId,
+            clusterId: vault.clusterId,
+            env: 'PROD',
+            credentials: credentials
+        };
+
+        const skyflowConfig = {
+            vaultConfigs: [vaultConfig],
+            logLevel: logLevelMap[this.config.logLevel] || LogLevel.INFO
+        };
+
+        return new Skyflow(skyflowConfig);
+    }
+
+    /**
+     * Strip punctuation from value (keep only alphanumeric and whitespace)
+     * @param {string} value - Input value
+     * @returns {string} Value with punctuation removed
+     * @private
+     */
+    _stripPunctuation(value) {
+        if (!value || typeof value !== 'string') {
+            return value;
+        }
+        // Remove all non-alphanumeric characters except whitespace
+        return value.replace(/[^\w\s]/g, '');
+    }
+
+    /**
+     * Get length of alphanumeric characters only (excluding punctuation and whitespace)
+     * @param {string} value - Input value
+     * @returns {number} Length of alphanumeric characters
+     * @private
+     */
+    _getAlphanumericLength(value) {
+        if (!value || typeof value !== 'string') {
+            return 0;
+        }
+        // Remove punctuation and whitespace, then get length
+        return value.replace(/[^\w]/g, '').length;
+    }
+
+    /**
+     * Validate DOB is a real date within allowed range
+     * @param {string} value - Date value (YYYY-MM-DD format)
+     * @param {Object} validation - Validation config with minDate and maxDate
+     * @returns {boolean} True if valid date in range
+     * @private
+     */
+    _validateDOB(value, validation) {
+        if (!value || typeof value !== 'string') {
+            return false;
+        }
+
+        try {
+            const date = new Date(value);
+
+            // Check if valid date
+            if (isNaN(date.getTime())) {
+                return false;
+            }
+
+            // Check date range
+            const minDate = new Date(validation.minDate);
+            const maxDate = new Date(validation.maxDate);
+
+            return date >= minDate && date <= maxDate;
+        } catch (error) {
+            console.error('DOB validation error:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Preprocess value before tokenization (Protegrity-compatible behavior)
+     * - Validate DOB date range (must happen before stripping punctuation)
+     * - Strip punctuation
+     * - Check minimum length (< minLength = skip tokenization)
+     * - Apply uppercase (NAME, ID only)
+     *
+     * @param {string} value - Original value
+     * @param {string} dataType - Data type (NAME, ID, SSN, DOB)
+     * @returns {Object} { value: processed value, skipTokenization: boolean }
+     * @private
+     */
+    _preprocessValue(value, dataType) {
+        const vault = this.vaultsByDataType[dataType];
+        if (!vault || !vault.transformations) {
+            // No transformations configured, return as-is
+            return { value: value, skipTokenization: false };
+        }
+
+        const transforms = vault.transformations;
+        let processed = value;
+
+        // Step 1: Validate DOB date range FIRST (before stripping punctuation)
+        // This must happen first because date validation needs the original format (e.g., "2005-04-05")
+        if (transforms.validation) {
+            const isValid = this._validateDOB(processed, transforms.validation);
+            if (!isValid) {
+                console.log(`Skipping tokenization: invalid DOB for ${dataType}`);
+                return { value: value, skipTokenization: true };
+            }
+        }
+
+        // Step 2: Strip punctuation if configured
+        if (transforms.stripPunctuation) {
+            processed = this._stripPunctuation(processed);
+        }
+
+        // Step 3: Check minimum length (return original value if too short)
+        if (transforms.minLength) {
+            const alphanumLength = this._getAlphanumericLength(processed);
+            if (alphanumLength < transforms.minLength) {
+                console.log(`Skipping tokenization: value too short (${alphanumLength} < ${transforms.minLength}) for ${dataType}`);
+                return { value: value, skipTokenization: true };
+            }
+        }
+
+        // Step 4: Apply uppercase if configured
+        if (transforms.uppercase) {
+            processed = processed.toUpperCase();
+        }
+
+        return { value: processed, skipTokenization: false };
+    }
+
+    /**
      * Tokenize a batch of values
      * @param {Array} values - Array of {rowIndex, value, vaultId, table, column, dataType}
+     * @param {string} ctx - Optional context (e.g., Snowflake username) for audit logging
      * @returns {Promise<Array>} Array of {rowIndex, token, error}
      */
-    async tokenizeBatch(values) {
+    async tokenizeBatch(values, ctx = null) {
         if (!values || values.length === 0) {
             return [];
         }
@@ -113,7 +290,7 @@ class SkyflowClient {
         // Process each data type group SEQUENTIALLY (with parallelization within each)
         const allResults = [];
         for (const [dataType, groupValues] of Object.entries(groupedByDataType)) {
-            const results = await this._tokenizeDataTypeGroup(dataType, groupValues);
+            const results = await this._tokenizeDataTypeGroup(dataType, groupValues, ctx);
             allResults.push(...results);
         }
 
@@ -126,9 +303,10 @@ class SkyflowClient {
     /**
      * Detokenize a batch of tokens
      * @param {Array} tokens - Array of {rowIndex, token, vaultId, dataType}
+     * @param {string} ctx - Optional context (e.g., Snowflake username) for audit logging
      * @returns {Promise<Array>} Array of {rowIndex, value, error}
      */
-    async detokenizeBatch(tokens) {
+    async detokenizeBatch(tokens, ctx = null) {
         if (!tokens || tokens.length === 0) {
             return [];
         }
@@ -148,7 +326,7 @@ class SkyflowClient {
         // Process each data type group SEQUENTIALLY (with parallelization within each)
         const allResults = [];
         for (const [dataType, groupTokens] of Object.entries(groupedByDataType)) {
-            const results = await this._detokenizeDataTypeGroup(dataType, groupTokens);
+            const results = await this._detokenizeDataTypeGroup(dataType, groupTokens, ctx);
             allResults.push(...results);
         }
 
@@ -162,7 +340,7 @@ class SkyflowClient {
      * Tokenize a group of values for a specific data type
      * @private
      */
-    async _tokenizeDataTypeGroup(dataType, values) {
+    async _tokenizeDataTypeGroup(dataType, values, ctx) {
         const vault = this.vaultsByDataType[dataType];
         if (!vault) {
             console.error(`No vault configured for data type: ${dataType}`);
@@ -173,7 +351,8 @@ class SkyflowClient {
             }));
         }
 
-        const client = this.skyflowClients[dataType];
+        // Get client with context-aware token if JWT auth
+        const client = await this._getClientForContext(dataType, ctx);
         const { table, column, vaultId } = vault;
 
         // Split into batches if needed
@@ -211,12 +390,38 @@ class SkyflowClient {
      */
     async _tokenizeBatch(dataType, values, client, vaultId, table, column) {
         try {
-            // Prepare insert data for SDK
-            const insertData = values.map(item => ({
-                [column]: item.value
+            // Preprocess values and separate into "skip" vs "process" groups
+            const preprocessedValues = values.map(item => {
+                const result = this._preprocessValue(item.value, dataType);
+                return {
+                    ...item,
+                    preprocessedValue: result.value,
+                    skipTokenization: result.skipTokenization
+                };
+            });
+
+            // Separate values that should skip tokenization
+            const valuesToSkip = preprocessedValues.filter(v => v.skipTokenization);
+            const valuesToProcess = preprocessedValues.filter(v => !v.skipTokenization);
+
+            console.log(`Tokenizing ${values.length} values for ${dataType} (vault: ${vaultId}, table: ${table}) - ${valuesToProcess.length} to process, ${valuesToSkip.length} to skip`);
+
+            // Collect results for skipped values (return original value as "token")
+            const skippedResults = valuesToSkip.map(item => ({
+                rowIndex: item.rowIndex,
+                token: item.value,  // Original value returned as token
+                error: null
             }));
 
-            console.log(`Tokenizing ${values.length} values for ${dataType} (vault: ${vaultId}, table: ${table})`);
+            // If no values to process, return skipped results only
+            if (valuesToProcess.length === 0) {
+                return skippedResults;
+            }
+
+            // Prepare insert data for SDK (using preprocessed values)
+            const insertData = valuesToProcess.map(item => ({
+                [column]: item.preprocessedValue
+            }));
 
             // Use SDK's insert with upsert and tokenization
             const insertRequest = new InsertRequest(table, insertData);
@@ -232,16 +437,24 @@ class SkyflowClient {
             console.log(`SDK insert completed in ${elapsed}ms for ${dataType}`);
             console.log('SDK Response:', JSON.stringify(response, null, 2));
 
-            // Parse SDK response
-            return this._parseInsertResponse(values, response, column);
+            // Parse SDK response for processed values
+            const processedResults = this._parseInsertResponse(valuesToProcess, response, column);
+
+            // Merge skipped and processed results, maintaining original order
+            const allResults = [...skippedResults, ...processedResults];
+            allResults.sort((a, b) => a.rowIndex - b.rowIndex);
+
+            return allResults;
 
         } catch (error) {
             console.error(`Tokenization failed for ${dataType}:`, error.message);
-            return values.map(v => ({
+            // Merge skipped results with errors for processed values
+            const errorResults = valuesToProcess.map(v => ({
                 rowIndex: v.rowIndex,
                 token: null,
                 error: error.message
             }));
+            return [...skippedResults, ...errorResults].sort((a, b) => a.rowIndex - b.rowIndex);
         }
     }
 
@@ -249,7 +462,7 @@ class SkyflowClient {
      * Detokenize a group of tokens for a specific data type
      * @private
      */
-    async _detokenizeDataTypeGroup(dataType, tokens) {
+    async _detokenizeDataTypeGroup(dataType, tokens, ctx) {
         const vault = this.vaultsByDataType[dataType];
         if (!vault) {
             console.error(`No vault configured for data type: ${dataType}`);
@@ -260,7 +473,8 @@ class SkyflowClient {
             }));
         }
 
-        const client = this.skyflowClients[dataType];
+        // Get client with context-aware token if JWT auth
+        const client = await this._getClientForContext(dataType, ctx);
         const { vaultId } = vault;
 
         // Split into batches if needed

@@ -229,6 +229,10 @@ async function handler(event, context) {
     });
 
     try {
+        // Extract Snowflake username from headers for audit logging
+        const headers = event.headers || {};
+        const snowflakeUser = headers['sf-context-current-user'] || headers['SF-Context-Current-User'] || null;
+
         // Determine operation and data type from path
         const path = event.path || event.rawPath || '';
         const operation = determineOperation(path);
@@ -281,7 +285,8 @@ async function handler(event, context) {
             console.log(`Starting tokenization of ${values.length} values for ${dataTypeFromPath}`);
             const startTime = Date.now();
 
-            const results = await client.tokenizeBatch(values);
+            // Pass Snowflake user context to tokenization
+            const results = await client.tokenizeBatch(values, snowflakeUser);
 
             const elapsed = Date.now() - startTime;
             const successCount = results.filter(r => !r.error).length;
@@ -311,7 +316,8 @@ async function handler(event, context) {
             console.log(`Starting detokenization of ${tokens.length} tokens`);
             const startTime = Date.now();
 
-            const results = await client.detokenizeBatch(tokens);
+            // Pass Snowflake user context to detokenization
+            const results = await client.detokenizeBatch(tokens, snowflakeUser);
 
             const elapsed = Date.now() - startTime;
             const successCount = results.filter(r => !r.error).length;
