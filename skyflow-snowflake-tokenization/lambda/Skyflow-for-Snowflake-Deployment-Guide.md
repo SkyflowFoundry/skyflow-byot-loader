@@ -12,7 +12,7 @@ Complete step-by-step guide to deploy Skyflow tokenization and detokenization fo
 - [Deployment Steps](#-deployment-steps)
   - [Step 1: Configure AWS CLI](#step-1-configure-aws-cli)
   - [Step 2: Prepare Configuration Files](#step-2-prepare-configuration-files)
-  - [Deployment Mode Selection](#deployment-mode-selection)
+  - [Configuration Method Selection](#configuration-method-selection)
   - [Step 3: Create AWS Secrets Manager Secret](#step-3-create-aws-secrets-manager-secret)
   - [Step 4: Create Lambda IAM Role](#step-4-create-lambda-iam-role)
   - [Step 5: Build Lambda Deployment Package](#step-5-build-lambda-deployment-package)
@@ -35,6 +35,7 @@ Complete step-by-step guide to deploy Skyflow tokenization and detokenization fo
 - [Updating the Lambda](#-updating-the-lambda)
 - [Cleanup / Uninstall](#-cleanup--uninstall)
 - [Support](#-support)
+- [Appendix: Manual Environment Variables](#-appendix-manual-environment-variables-method-2)
 - [Additional Resources](#-additional-resources)
 
 ---
@@ -263,11 +264,13 @@ Create `skyflow-config.json` with your Skyflow credentials. You can use either *
 
 ---
 
-### Deployment Mode Selection
+### Configuration Method Selection
 
-This guide covers **Secrets Manager deployment** (recommended for production). There are two deployment modes available:
+There are **two configuration methods** available, both fully documented in this guide:
 
-#### Option 1: Secrets Manager (This Guide) ✅ **Recommended**
+#### Method 1: AWS Secrets Manager ✅ **Recommended**
+
+Store configuration in AWS Secrets Manager and reference it via environment variable.
 
 **Pros:**
 - Configuration updates without Lambda redeployment
@@ -282,33 +285,31 @@ This guide covers **Secrets Manager deployment** (recommended for production). T
 
 **Use when:** You need configuration flexibility, credential rotation, or are deploying to production.
 
-#### Option 2: File-Based Configuration
+**Setup:** Follow Step 3 (Create Secret) → Step 6 (set `SECRETS_MANAGER_SECRET_NAME` env var)
 
-In this mode, `skyflow-config.json` is bundled directly into the Lambda deployment package.
+#### Method 2: Lambda Environment Variables
+
+Store configuration directly as Lambda environment variables (no Secrets Manager).
 
 **Pros:**
 - Simpler setup (no Secrets Manager)
 - No additional AWS costs
 - Faster cold starts (no Secrets Manager API call)
+- All AWS CLI commands, no external dependencies
 
 **Cons:**
 - Configuration changes require Lambda redeployment
-- Credentials stored in Lambda package (less secure)
-- No centralized secrets management
+- More complex initial setup (many environment variables)
+- 4KB limit on total environment variable size
+- Less secure (visible in Lambda console)
 
-**Use when:** You're doing development/testing or have a simple deployment with infrequent config changes.
+**Use when:** You're doing development/testing, have simple configuration, or want to avoid Secrets Manager.
 
-**To deploy with file-based config:**
-```bash
-# Place your config in the lambda directory
-cp skyflow-config.json lambda/
+**Setup:** Skip Step 3 → Step 6 (set multiple `SKYFLOW_*` env vars instead) → See "Appendix: Manual Environment Variables" below
 
-# Run the deployment script with 'config' argument
-cd lambda
-./deploy.sh config
-```
+---
 
-This guide continues with **Secrets Manager deployment**. If you chose file-based, skip to Step 4 after running the deploy script.
+**This guide follows Method 1 (Secrets Manager)**. If you want Method 2, see the "Appendix: Manual Environment Variables" section at the end of this guide.
 
 ---
 
@@ -1243,6 +1244,197 @@ For issues or questions:
 
 ---
 
+## 📎 Appendix: Manual Environment Variables (Method 2)
+
+This section documents **Method 2: Lambda Environment Variables** as an alternative to AWS Secrets Manager. All features (transformations, caching, etc.) work identically with both methods.
+
+### When to Use This Method
+
+- Development/testing environments
+- Simpler deployments without Secrets Manager
+- Avoiding additional AWS service costs
+- Full control via AWS CLI
+
+### Environment Variable Reference
+
+The Lambda function supports the following environment variables:
+
+#### Authentication (choose one):
+
+**Option A: JWT (Service Account)** - Recommended
+```bash
+SKYFLOW_CLIENT_ID="your_client_id"
+SKYFLOW_CLIENT_NAME="your_service_account_name"
+SKYFLOW_TOKEN_URI="https://manage.skyflowapis.com/v1/auth/sa/oauth/token"
+SKYFLOW_KEY_ID="your_key_id"
+SKYFLOW_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYOUR_KEY_HERE\n-----END PRIVATE KEY-----\n"
+SKYFLOW_KEY_ALGORITHM="KEY_ALG_RSA_2048"
+```
+
+**Option B: API Key**
+```bash
+SKYFLOW_API_KEY="your_api_key"
+```
+
+#### Vault Configuration (required):
+```bash
+SKYFLOW_VAULT_URL="https://YOUR_CLUSTER_ID.vault.skyflowapis.com"
+SKYFLOW_VAULT_DEFINITIONS='[{"vaultId":"...","table":"...","column":"...","dataType":"NAME","transformations":{"uppercase":true,"minLength":3,"stripPunctuation":true}},...]'
+```
+
+#### Performance Settings (required):
+```bash
+SKYFLOW_TOKENIZE_BATCH_SIZE="5"
+SKYFLOW_TOKENIZE_MAX_CONCURRENCY="400"
+SKYFLOW_DETOKENIZE_BATCH_SIZE="300"
+SKYFLOW_DETOKENIZE_MAX_CONCURRENCY="400"
+SKYFLOW_LOG_LEVEL="INFO"
+```
+
+### Step-by-Step: Deploy with Environment Variables
+
+**Step 1: Prepare your configuration**
+
+Create a file `env-vars.json` with your settings:
+
+```json
+{
+  "SKYFLOW_CLIENT_ID": "your_client_id",
+  "SKYFLOW_CLIENT_NAME": "your_service_account_name",
+  "SKYFLOW_TOKEN_URI": "https://manage.skyflowapis.com/v1/auth/sa/oauth/token",
+  "SKYFLOW_KEY_ID": "your_key_id",
+  "SKYFLOW_PRIVATE_KEY": "-----BEGIN PRIVATE KEY-----\\nYOUR_KEY_HERE\\n-----END PRIVATE KEY-----\\n",
+  "SKYFLOW_KEY_ALGORITHM": "KEY_ALG_RSA_2048",
+  "SKYFLOW_VAULT_URL": "https://YOUR_CLUSTER_ID.vault.skyflowapis.com",
+  "SKYFLOW_VAULT_DEFINITIONS": "[{\"vaultId\":\"vault1\",\"table\":\"persons\",\"column\":\"name\",\"dataType\":\"NAME\",\"transformations\":{\"uppercase\":true,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault2\",\"table\":\"persons\",\"column\":\"person_id\",\"dataType\":\"ID\",\"transformations\":{\"uppercase\":true,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault3\",\"table\":\"persons\",\"column\":\"date_of_birth\",\"dataType\":\"DOB\",\"transformations\":{\"uppercase\":false,\"stripPunctuation\":true,\"validation\":{\"minDate\":\"0600-01-01\",\"maxDate\":\"3337-11-27\"}}},{\"vaultId\":\"vault4\",\"table\":\"persons\",\"column\":\"ssn\",\"dataType\":\"SSN\",\"transformations\":{\"uppercase\":false,\"minLength\":3,\"stripPunctuation\":true}}]",
+  "SKYFLOW_TOKENIZE_BATCH_SIZE": "5",
+  "SKYFLOW_TOKENIZE_MAX_CONCURRENCY": "400",
+  "SKYFLOW_DETOKENIZE_BATCH_SIZE": "300",
+  "SKYFLOW_DETOKENIZE_MAX_CONCURRENCY": "400",
+  "SKYFLOW_LOG_LEVEL": "INFO"
+}
+```
+
+**Important:** The `SKYFLOW_VAULT_DEFINITIONS` must be a JSON string (escaped quotes). Each vault definition should include the `transformations` object.
+
+**Step 2: Follow main deployment guide with modifications**
+
+1. **Skip Step 3** (no Secrets Manager needed)
+2. **Skip Step 4.3** (no Secrets Manager permissions needed)
+3. **Modify Step 4.2** - Create Lambda role WITHOUT Secrets Manager policy:
+
+```bash
+# Create IAM role
+aws iam create-role \
+    --role-name skyflow-tokenization-lambda-role \
+    --assume-role-policy-document file://lambda-trust-policy.json \
+    --description "Execution role for Skyflow tokenization Lambda"
+
+# Attach basic Lambda execution policy
+aws iam attach-role-policy \
+    --role-name skyflow-tokenization-lambda-role \
+    --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+# Wait for role to propagate
+sleep 10
+```
+
+4. **Continue with Step 5** (build deployment package as documented)
+
+5. **Modify Step 6** - Create Lambda with environment variables instead of secret:
+
+```bash
+# Create Lambda function with environment variables
+aws lambda create-function \
+    --function-name skyflow-tokenization \
+    --runtime nodejs20.x \
+    --role arn:aws:iam::${AWS_ACCOUNT_ID}:role/skyflow-tokenization-lambda-role \
+    --handler handler.handler \
+    --zip-file fileb://function.zip \
+    --timeout 60 \
+    --memory-size 256 \
+    --description "Skyflow tokenization and detokenization for Snowflake" \
+    --environment file://env-vars.json \
+    --region ${AWS_REGION}
+
+# Verify Lambda was created
+aws lambda get-function-configuration \
+    --function-name skyflow-tokenization \
+    --region ${AWS_REGION} \
+    --query 'Environment.Variables'
+```
+
+6. **Continue with Steps 7-9** (API Gateway and Snowflake setup as documented)
+
+### Updating Configuration
+
+To update configuration with this method:
+
+```bash
+# Update environment variables
+aws lambda update-function-configuration \
+    --function-name skyflow-tokenization \
+    --environment file://env-vars.json \
+    --region ${AWS_REGION}
+
+# Wait for update to complete
+aws lambda wait function-updated \
+    --function-name skyflow-tokenization \
+    --region ${AWS_REGION}
+```
+
+**Note:** Configuration changes require Lambda redeployment, unlike Secrets Manager which updates within 5 minutes via cache refresh.
+
+### Validation
+
+After deployment, verify environment variables are set:
+
+```bash
+aws lambda get-function-configuration \
+    --function-name skyflow-tokenization \
+    --region ${AWS_REGION} \
+    --query 'Environment.Variables' \
+    --output json
+```
+
+Check CloudWatch logs to confirm it's using environment variables:
+
+```bash
+aws logs tail /aws/lambda/skyflow-tokenization \
+    --region ${AWS_REGION} \
+    --follow
+
+# Look for: "Loading from SKYFLOW_* environment variables"
+```
+
+### Troubleshooting
+
+**Error: "Missing Skyflow credentials"**
+- Ensure either `SKYFLOW_CLIENT_ID` or `SKYFLOW_API_KEY` is set
+- Check for typos in environment variable names (must be uppercase)
+
+**Error: "Missing vaultUrl in vaults configuration"**
+- Verify `SKYFLOW_VAULT_URL` is set correctly
+- Ensure `SKYFLOW_VAULT_DEFINITIONS` is valid JSON (use a JSON validator)
+
+**Error: "Invalid vaultUrl format"**
+- Vault URL must match pattern: `https://<clusterId>.vault.skyflowapis.com`
+
+### Feature Compatibility
+
+All features work identically with both configuration methods:
+
+| Feature | Secrets Manager | Environment Variables |
+|---------|----------------|----------------------|
+| Data transformations | ✅ | ✅ |
+| Context-aware client caching | ✅ | ✅ |
+| DOB validation | ✅ | ✅ |
+| JWT/API Key auth | ✅ | ✅ |
+| Batch processing | ✅ | ✅ |
+| Config updates | Auto (5-min) | Manual (redeploy) |
+
+---
+
 ## 🔗 Additional Resources
 
 - **Skyflow API Documentation:** https://docs.skyflow.com/
@@ -1254,4 +1446,4 @@ For issues or questions:
 
 **Deployment complete!** 🎉
 
-Your Skyflow tokenization is now integrated with Snowflake using a Node.js Lambda function with performance optimizations including singleton client management, configuration caching, HTTP/2 support, buffer pooling, and adaptive retry logic.
+Your Skyflow tokenization is now integrated with Snowflake using a Node.js Lambda function with performance optimizations including context-aware client caching, configuration caching, data transformations, and adaptive retry logic.
