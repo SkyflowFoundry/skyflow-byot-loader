@@ -384,18 +384,6 @@ Store credentials securely in AWS Secrets Manager:
 }
 ```
 
-### Environment Variables (Alternative)
-
-For testing or non-Secrets Manager deployments:
-
-```bash
-export SKYFLOW_API_KEY="your-api-key-or-bearer-token"
-export VAULT_ID_NAME="vault-id-for-names"
-export CLUSTER_ID_NAME="your-cluster-id"
-export TABLE_NAME="persons"
-export COLUMN_NAME="name"
-# Repeat for ID, DOB, SSN data types
-```
 
 ### SDK Configuration
 

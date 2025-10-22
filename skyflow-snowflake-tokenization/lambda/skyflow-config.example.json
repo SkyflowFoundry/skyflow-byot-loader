@@ -16,25 +16,48 @@
         "vaultId": "YOUR_VAULT_ID_FOR_NAMES",
         "table": "name",
         "column": "name",
-        "dataType": "NAME"
+        "dataType": "NAME",
+        "transformations": {
+          "uppercase": true,
+          "minLength": 3,
+          "stripPunctuation": true
+        }
       },
       {
         "vaultId": "YOUR_VAULT_ID_FOR_IDS",
         "table": "id",
         "column": "id",
-        "dataType": "ID"
+        "dataType": "ID",
+        "transformations": {
+          "uppercase": true,
+          "minLength": 3,
+          "stripPunctuation": true
+        }
       },
       {
         "vaultId": "YOUR_VAULT_ID_FOR_DOBS",
         "table": "dob",
         "column": "dob",
-        "dataType": "DOB"
+        "dataType": "DOB",
+        "transformations": {
+          "uppercase": false,
+          "stripPunctuation": true,
+          "validation": {
+            "minDate": "0600-01-01",
+            "maxDate": "3337-11-27"
+          }
+        }
       },
       {
         "vaultId": "YOUR_VAULT_ID_FOR_SSNS",
         "table": "ssn",
         "column": "ssn",
-        "dataType": "SSN"
+        "dataType": "SSN",
+        "transformations": {
+          "uppercase": false,
+          "minLength": 3,
+          "stripPunctuation": true
+        }
       }
     ]
   },
