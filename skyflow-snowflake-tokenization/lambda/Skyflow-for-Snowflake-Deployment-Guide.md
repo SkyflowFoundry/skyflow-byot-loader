@@ -1427,7 +1427,6 @@ All features work identically with both configuration methods:
 | Feature | Secrets Manager | Environment Variables |
 |---------|----------------|----------------------|
 | Data transformations | ✅ | ✅ |
-| Context-aware client caching | ✅ | ✅ |
 | DOB validation | ✅ | ✅ |
 | JWT/API Key auth | ✅ | ✅ |
 | Batch processing | ✅ | ✅ |
@@ -1446,4 +1445,4 @@ All features work identically with both configuration methods:
 
 **Deployment complete!** 🎉
 
-Your Skyflow tokenization is now integrated with Snowflake using a Node.js Lambda function with performance optimizations including context-aware client caching, configuration caching, data transformations, and adaptive retry logic.
+Your Skyflow tokenization is now integrated with Snowflake using a Node.js Lambda function with performance optimizations including configuration caching, data transformations, and adaptive retry logic.
