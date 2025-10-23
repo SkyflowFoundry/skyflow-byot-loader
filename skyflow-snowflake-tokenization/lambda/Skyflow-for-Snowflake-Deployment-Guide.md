@@ -27,7 +27,6 @@ Complete step-by-step guide to deploy Skyflow tokenization and detokenization fo
 - [Performance Features](#-performance-features)
 - [Configuration Options](#-configuration-options)
 - [Troubleshooting](#-troubleshooting)
-- [Context-aware Features Status](#context-aware-features-status)
   - [Lambda Can't Read Secret](#lambda-cant-read-secret)
   - [Permission Denied](#permission-denied)
   - [HTTP 401 Unauthorized](#http-401-unauthorized)
@@ -1428,7 +1427,6 @@ All features work identically with both configuration methods:
 | Feature | Secrets Manager | Environment Variables |
 |---------|----------------|----------------------|
 | Data transformations | ✅ | ✅ |
-| Context-aware client caching | ✅ | ✅ |
 | DOB validation | ✅ | ✅ |
 | JWT/API Key auth | ✅ | ✅ |
 | Batch processing | ✅ | ✅ |
