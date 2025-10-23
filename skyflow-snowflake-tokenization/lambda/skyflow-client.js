@@ -254,7 +254,6 @@ class SkyflowClient {
         if (transforms.validation) {
             const isValid = this._validateDOB(processed, transforms.validation);
             if (!isValid) {
-                console.log(`Skipping tokenization: invalid DOB for ${dataType}`);
                 return { value: value, skipTokenization: true };
             }
         }
@@ -268,7 +267,6 @@ class SkyflowClient {
         if (transforms.minLength) {
             const alphanumLength = this._getAlphanumericLength(processed);
             if (alphanumLength < transforms.minLength) {
-                console.log(`Skipping tokenization: value too short (${alphanumLength} < ${transforms.minLength}) for ${dataType}`);
                 return { value: value, skipTokenization: true };
             }
         }
@@ -374,15 +372,11 @@ class SkyflowClient {
 
         // Split into batches if needed
         if (values.length > this.TOKENIZE_BATCH_SIZE) {
-            console.log(`Splitting ${values.length} values into batches of ${this.TOKENIZE_BATCH_SIZE} for ${dataType}`);
-
             // Create batches
             const batches = [];
             for (let i = 0; i < values.length; i += this.TOKENIZE_BATCH_SIZE) {
                 batches.push(values.slice(i, i + this.TOKENIZE_BATCH_SIZE));
             }
-
-            console.log(`Processing ${batches.length} batches with max concurrency of ${this.TOKENIZE_MAX_CONCURRENCY}`);
 
             // Process batches in parallel with concurrency control
             const allResults = [];
@@ -421,8 +415,6 @@ class SkyflowClient {
             const valuesToSkip = preprocessedValues.filter(v => v.skipTokenization);
             const valuesToProcess = preprocessedValues.filter(v => !v.skipTokenization);
 
-            console.log(`Tokenizing ${values.length} values for ${dataType} (vault: ${vaultId}, table: ${table}) - ${valuesToProcess.length} to process, ${valuesToSkip.length} to skip`);
-
             // Collect results for skipped values (return original value as "token")
             const skippedResults = valuesToSkip.map(item => ({
                 rowIndex: item.rowIndex,
@@ -452,7 +444,6 @@ class SkyflowClient {
             const elapsed = Date.now() - startTime;
 
             console.log(`SDK insert completed in ${elapsed}ms for ${dataType}`);
-            console.log('SDK Response:', JSON.stringify(response, null, 2));
 
             // Parse SDK response for processed values
             const processedResults = this._parseInsertResponse(valuesToProcess, response, column);
@@ -496,15 +487,11 @@ class SkyflowClient {
 
         // Split into batches if needed
         if (tokens.length > this.DETOKENIZE_BATCH_SIZE) {
-            console.log(`Splitting ${tokens.length} tokens into batches of ${this.DETOKENIZE_BATCH_SIZE} for ${dataType}`);
-
             // Create batches
             const batches = [];
             for (let i = 0; i < tokens.length; i += this.DETOKENIZE_BATCH_SIZE) {
                 batches.push(tokens.slice(i, i + this.DETOKENIZE_BATCH_SIZE));
             }
-
-            console.log(`Processing ${batches.length} batches with max concurrency of ${this.DETOKENIZE_MAX_CONCURRENCY}`);
 
             // Process batches in parallel with concurrency control
             const allResults = [];
@@ -529,8 +516,6 @@ class SkyflowClient {
      */
     async _detokenizeBatch(dataType, tokens, client, vaultId) {
         try {
-            console.log(`Detokenizing ${tokens.length} tokens for ${dataType} (vault: ${vaultId})`);
-
             // Prepare detokenize request for SDK
             const detokenizeData = tokens.map(item => ({
                 token: item.token,
@@ -572,15 +557,12 @@ class SkyflowClient {
         const insertedFields = response.insertedFields || [];
         const errors = response.errors || [];
 
-        console.log(`Parsing insert response: ${insertedFields.length} insertedFields, ${errors.length} errors`);
-
         for (let i = 0; i < values.length; i++) {
             const item = values[i];
 
             // Check if this index has an error
             const errorForIndex = errors.find(e => e.index === i);
             if (errorForIndex) {
-                console.log(`Error at index ${i}:`, errorForIndex);
                 results.push({
                     rowIndex: item.rowIndex,
                     token: null,
@@ -592,7 +574,6 @@ class SkyflowClient {
             // Get token from insertedFields
             // The token is the field value itself (e.g., insertedFields[i][column])
             const inserted = insertedFields[i];
-            console.log(`Index ${i} inserted:`, JSON.stringify(inserted));
 
             if (inserted && inserted[column]) {
                 results.push({
@@ -601,13 +582,19 @@ class SkyflowClient {
                     error: null
                 });
             } else {
-                console.log(`No token found at index ${i}. Column: ${column}, inserted:`, inserted);
                 results.push({
                     rowIndex: item.rowIndex,
                     token: null,
                     error: 'No token returned from SDK'
                 });
             }
+        }
+
+        // Log summary only
+        const successCount = results.filter(r => !r.error).length;
+        const errorCount = results.filter(r => r.error).length;
+        if (errorCount > 0) {
+            console.log(`Insert response parsed: ${successCount} successful, ${errorCount} errors`);
         }
 
         return results;
