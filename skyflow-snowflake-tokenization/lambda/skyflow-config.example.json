@@ -66,5 +66,5 @@
   "tokenizeMaxConcurrency": 400,
   "detokenizeBatchSize": 300,
   "detokenizeMaxConcurrency": 400,
-  "logLevel": "INFO"
+  "logLevel": "ERROR"
 }
