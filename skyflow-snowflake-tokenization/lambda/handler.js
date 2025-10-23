@@ -71,6 +71,9 @@ function parseDetokenizeRequest(event) {
         throw new Error('Invalid Snowflake request format: missing "data" array');
     }
 
+    // Track unique data types for logging
+    const dataTypesFound = new Set();
+
     const tokens = event.data.map(row => {
         if (!Array.isArray(row) || row.length < 2) {
             throw new Error(`Invalid row format: ${JSON.stringify(row)}`);
@@ -86,7 +89,7 @@ function parseDetokenizeRequest(event) {
             const vault = config.vaultsByDataType[dataTypeOrVaultId.toUpperCase()];
             vaultId = vault.vaultId;
             dataType = dataTypeOrVaultId.toUpperCase();
-            console.log(`Resolved data type '${dataTypeOrVaultId}' to vault ID: ${vaultId}`);
+            dataTypesFound.add(dataType);
         }
 
         return {
@@ -97,7 +100,9 @@ function parseDetokenizeRequest(event) {
         };
     });
 
-    console.log(`Parsed ${tokens.length} tokens from Snowflake detokenize request`);
+    console.log(`Parsed ${tokens.length} tokens from Snowflake detokenize request`, {
+        dataTypes: Array.from(dataTypesFound)
+    });
     return tokens;
 }
 
@@ -232,6 +237,10 @@ async function handler(event, context) {
         // Extract Snowflake username from headers for audit logging
         const headers = event.headers || {};
         const snowflakeUser = headers['sf-context-current-user'] || headers['SF-Context-Current-User'] || null;
+
+        // OPTIONAL: Disable context for better performance (fewer auth calls)
+        // Uncomment the line below to disable context-aware authentication
+        // const snowflakeUser = null;
 
         // Determine operation and data type from path
         const path = event.path || event.rawPath || '';
