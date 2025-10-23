@@ -27,6 +27,7 @@ Complete step-by-step guide to deploy Skyflow tokenization and detokenization fo
 - [Performance Features](#-performance-features)
 - [Configuration Options](#-configuration-options)
 - [Troubleshooting](#-troubleshooting)
+- [Context-aware Features Status](#context-aware-features-status)
   - [Lambda Can't Read Secret](#lambda-cant-read-secret)
   - [Permission Denied](#permission-denied)
   - [HTTP 401 Unauthorized](#http-401-unauthorized)
@@ -1446,4 +1447,4 @@ All features work identically with both configuration methods:
 
 **Deployment complete!** 🎉
 
-Your Skyflow tokenization is now integrated with Snowflake using a Node.js Lambda function with performance optimizations including context-aware client caching, configuration caching, data transformations, and adaptive retry logic.
+Your Skyflow tokenization is now integrated with Snowflake using a Node.js Lambda function with performance optimizations including configuration caching, data transformations, and adaptive retry logic.

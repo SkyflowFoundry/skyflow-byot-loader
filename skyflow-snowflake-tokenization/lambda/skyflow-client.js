@@ -2,7 +2,6 @@
  * Skyflow SDK Client Wrapper
  *
  * Handles tokenization and detokenization using official Skyflow Node.js SDK v2.0.0
- * Supports context-aware authorization via SDK's built-in context field
  */
 
 const { Skyflow, LogLevel, RedactionType, InsertRequest, InsertOptions, DetokenizeRequest, DetokenizeOptions } = require('skyflow-node');
@@ -23,16 +22,8 @@ class SkyflowClient {
         this.config = config;
         this.vaultsByDataType = config.vaultsByDataType;
 
-        // Detect auth type - ctx field only supported with JWT/Service Account auth
+        // Detect auth type
         this.isJwtAuth = !config.credentials.apiKey;
-
-        // Store service account credentials for token generation
-        this.serviceAccountCreds = this.isJwtAuth ? JSON.stringify(config.credentials) : null;
-
-        // Cache for context-aware clients (JWT with context field)
-        // Key format: "dataType:username"
-        // Relies on Lambda container recycling for natural cleanup
-        this.contextClientCache = new Map();
 
         // Separate batch size and concurrency for tokenize vs detokenize
         this.TOKENIZE_BATCH_SIZE = config.tokenizeBatchSize;
@@ -100,73 +91,6 @@ class SkyflowClient {
         });
     }
 
-    /**
-     * Get or create SDK client for a specific data type and context
-     * For JWT auth with context: creates client with context in credentials
-     * For API key auth: returns existing client (no context support)
-     *
-     * @param {string} dataType - Data type (NAME, SSN, etc.)
-     * @param {string} ctx - Optional Snowflake username for context
-     * @returns {Promise<Skyflow>} SDK client instance
-     * @private
-     */
-    async _getClientForContext(dataType, ctx) {
-        // For API key auth, use existing client (no context support)
-        if (!this.isJwtAuth) {
-            return this.skyflowClients[dataType];
-        }
-
-        // For JWT auth without context, use existing client
-        if (!ctx) {
-            return this.skyflowClients[dataType];
-        }
-
-        // For JWT auth with context, check cache first
-        const cacheKey = `${dataType}:${ctx}`;
-        if (this.contextClientCache.has(cacheKey)) {
-            return this.contextClientCache.get(cacheKey);
-        }
-
-        // Cache miss - create new client with context field
-        const vault = this.vaultsByDataType[dataType];
-        if (!vault) {
-            throw new Error(`No vault configured for data type: ${dataType}`);
-        }
-
-        // Map log level
-        const logLevelMap = {
-            'ERROR': LogLevel.ERROR,
-            'WARN': LogLevel.WARN,
-            'INFO': LogLevel.INFO,
-            'DEBUG': LogLevel.DEBUG
-        };
-
-        // Create credentials with context field (SDK v2 feature)
-        const credentials = {
-            credentialsString: this.serviceAccountCreds,
-            context: ctx
-        };
-
-        const vaultConfig = {
-            vaultId: vault.vaultId,
-            clusterId: vault.clusterId,
-            env: 'PROD',
-            credentials: credentials
-        };
-
-        const skyflowConfig = {
-            vaultConfigs: [vaultConfig],
-            logLevel: logLevelMap[this.config.logLevel] || LogLevel.INFO
-        };
-
-        const client = new Skyflow(skyflowConfig);
-
-        // Store in cache for reuse
-        this.contextClientCache.set(cacheKey, client);
-        console.log(`Created and cached context-aware client for ${dataType}:${ctx} (cache size: ${this.contextClientCache.size})`);
-
-        return client;
-    }
 
     /**
      * Strip punctuation from value (keep only alphanumeric and whitespace)
@@ -282,10 +206,9 @@ class SkyflowClient {
     /**
      * Tokenize a batch of values
      * @param {Array} values - Array of {rowIndex, value, vaultId, table, column, dataType}
-     * @param {string} ctx - Optional context (e.g., Snowflake username) for audit logging
      * @returns {Promise<Array>} Array of {rowIndex, token, error}
      */
-    async tokenizeBatch(values, ctx = null) {
+    async tokenizeBatch(values) {
         if (!values || values.length === 0) {
             return [];
         }
@@ -305,7 +228,7 @@ class SkyflowClient {
         // Process each data type group SEQUENTIALLY (with parallelization within each)
         const allResults = [];
         for (const [dataType, groupValues] of Object.entries(groupedByDataType)) {
-            const results = await this._tokenizeDataTypeGroup(dataType, groupValues, ctx);
+            const results = await this._tokenizeDataTypeGroup(dataType, groupValues);
             allResults.push(...results);
         }
 
@@ -318,10 +241,9 @@ class SkyflowClient {
     /**
      * Detokenize a batch of tokens
      * @param {Array} tokens - Array of {rowIndex, token, vaultId, dataType}
-     * @param {string} ctx - Optional context (e.g., Snowflake username) for audit logging
      * @returns {Promise<Array>} Array of {rowIndex, value, error}
      */
-    async detokenizeBatch(tokens, ctx = null) {
+    async detokenizeBatch(tokens) {
         if (!tokens || tokens.length === 0) {
             return [];
         }
@@ -341,7 +263,7 @@ class SkyflowClient {
         // Process each data type group SEQUENTIALLY (with parallelization within each)
         const allResults = [];
         for (const [dataType, groupTokens] of Object.entries(groupedByDataType)) {
-            const results = await this._detokenizeDataTypeGroup(dataType, groupTokens, ctx);
+            const results = await this._detokenizeDataTypeGroup(dataType, groupTokens);
             allResults.push(...results);
         }
 
@@ -355,7 +277,7 @@ class SkyflowClient {
      * Tokenize a group of values for a specific data type
      * @private
      */
-    async _tokenizeDataTypeGroup(dataType, values, ctx) {
+    async _tokenizeDataTypeGroup(dataType, values) {
         const vault = this.vaultsByDataType[dataType];
         if (!vault) {
             console.error(`No vault configured for data type: ${dataType}`);
@@ -366,8 +288,8 @@ class SkyflowClient {
             }));
         }
 
-        // Get client with context-aware token if JWT auth
-        const client = await this._getClientForContext(dataType, ctx);
+        // Get client for this data type
+        const client = this.skyflowClients[dataType];
         const { table, column, vaultId } = vault;
 
         // Split into batches if needed
@@ -470,7 +392,7 @@ class SkyflowClient {
      * Detokenize a group of tokens for a specific data type
      * @private
      */
-    async _detokenizeDataTypeGroup(dataType, tokens, ctx) {
+    async _detokenizeDataTypeGroup(dataType, tokens) {
         const vault = this.vaultsByDataType[dataType];
         if (!vault) {
             console.error(`No vault configured for data type: ${dataType}`);
@@ -481,8 +403,8 @@ class SkyflowClient {
             }));
         }
 
-        // Get client with context-aware token if JWT auth
-        const client = await this._getClientForContext(dataType, ctx);
+        // Get client for this data type
+        const client = this.skyflowClients[dataType];
         const { vaultId } = vault;
 
         // Split into batches if needed
