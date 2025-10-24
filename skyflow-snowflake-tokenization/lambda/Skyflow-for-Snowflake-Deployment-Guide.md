@@ -1309,9 +1309,9 @@ Create a file `env-vars.json` with your settings:
   "SKYFLOW_VAULT_DEFINITIONS": "[{\"vaultId\":\"vault1\",\"table\":\"persons\",\"column\":\"name\",\"dataType\":\"NAME\",\"transformations\":{\"uppercase\":true,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault2\",\"table\":\"persons\",\"column\":\"person_id\",\"dataType\":\"ID\",\"transformations\":{\"uppercase\":true,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault3\",\"table\":\"persons\",\"column\":\"date_of_birth\",\"dataType\":\"DOB\",\"transformations\":{\"uppercase\":false,\"stripPunctuation\":true,\"validation\":{\"minDate\":\"0600-01-01\",\"maxDate\":\"3337-11-27\"}}},{\"vaultId\":\"vault4\",\"table\":\"persons\",\"column\":\"ssn\",\"dataType\":\"SSN\",\"transformations\":{\"uppercase\":false,\"minLength\":3,\"stripPunctuation\":true}}]",
   "SKYFLOW_TOKENIZE_BATCH_SIZE": "5",
   "SKYFLOW_TOKENIZE_MAX_CONCURRENCY": "400",
-  "SKYFLOW_DETOKENIZE_BATCH_SIZE": "300",
-  "SKYFLOW_DETOKENIZE_MAX_CONCURRENCY": "400",
-  "SKYFLOW_LOG_LEVEL": "INFO"
+  "SKYFLOW_DETOKENIZE_BATCH_SIZE": "100",
+  "SKYFLOW_DETOKENIZE_MAX_CONCURRENCY": "500",
+  "SKYFLOW_LOG_LEVEL": "ERROR"
 }
 ```
 
