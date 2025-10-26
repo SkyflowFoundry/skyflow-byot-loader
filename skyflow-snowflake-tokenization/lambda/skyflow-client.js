@@ -403,16 +403,43 @@ class SkyflowClient {
             }));
         }
 
+        // Preprocess tokens: skip detokenization for values that would not have been tokenized
+        const preprocessedTokens = tokens.map(item => {
+            // For detokenization, treat the "token" as the value to check
+            const result = this._preprocessValue(item.token, dataType);
+            return {
+                ...item,
+                preprocessedToken: result.value,
+                skipDetokenization: result.skipTokenization
+            };
+        });
+
+        // Separate tokens to skip and to process
+        const tokensToSkip = preprocessedTokens.filter(t => t.skipDetokenization);
+        const tokensToProcess = preprocessedTokens.filter(t => !t.skipDetokenization);
+
+        // Results for skipped tokens: return original value as detokenized value
+        const skippedResults = tokensToSkip.map(item => ({
+            rowIndex: item.rowIndex,
+            value: item.token,
+            error: null
+        }));
+
+        // If no tokens to process, return skipped results only
+        if (tokensToProcess.length === 0) {
+            return skippedResults;
+        }
+
         // Get client for this data type
         const client = this.skyflowClients[dataType];
         const { vaultId } = vault;
 
         // Split into batches if needed
-        if (tokens.length > this.DETOKENIZE_BATCH_SIZE) {
+        if (tokensToProcess.length > this.DETOKENIZE_BATCH_SIZE) {
             // Create batches
             const batches = [];
-            for (let i = 0; i < tokens.length; i += this.DETOKENIZE_BATCH_SIZE) {
-                batches.push(tokens.slice(i, i + this.DETOKENIZE_BATCH_SIZE));
+            for (let i = 0; i < tokensToProcess.length; i += this.DETOKENIZE_BATCH_SIZE) {
+                batches.push(tokensToProcess.slice(i, i + this.DETOKENIZE_BATCH_SIZE));
             }
 
             // Process batches in parallel with concurrency control
@@ -426,10 +453,19 @@ class SkyflowClient {
                 allResults.push(...groupResults.flat());
             }
 
-            return allResults;
+            // Merge skipped and processed results, maintaining original order
+            const mergedResults = [...skippedResults, ...allResults.flat()];
+            mergedResults.sort((a, b) => a.rowIndex - b.rowIndex);
+            return mergedResults;
         }
 
-        return await this._detokenizeBatch(dataType, tokens, client, vaultId);
+        // Process single batch
+        const processedResults = await this._detokenizeBatch(dataType, tokensToProcess, client, vaultId);
+
+        // Merge skipped and processed results, maintaining original order
+        const mergedResults = [...skippedResults, ...processedResults];
+        mergedResults.sort((a, b) => a.rowIndex - b.rowIndex);
+        return mergedResults;
     }
 
     /**
