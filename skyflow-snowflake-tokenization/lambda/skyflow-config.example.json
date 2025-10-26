@@ -56,7 +56,7 @@
         "transformations": {
           "uppercase": false,
           "minLength": 3,
-          "stripPunctuation": true
+          "stripPunctuation": false
         }
       }
     ]
