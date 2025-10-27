@@ -26,22 +26,22 @@ USE SCHEMA YOUR_SCHEMA;
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_NAME(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://23fv2q9z4i.execute-api.us-east-1.amazonaws.com/prod/detokenize';
+    AS 'https://g8cf1njxqi.execute-api.us-east-1.amazonaws.com/prod/detokenize';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_ID(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://23fv2q9z4i.execute-api.us-east-1.amazonaws.com/prod/detokenize';
+    AS 'https://g8cf1njxqi.execute-api.us-east-1.amazonaws.com/prod/detokenize';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_DOB(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://23fv2q9z4i.execute-api.us-east-1.amazonaws.com/prod/detokenize';
+    AS 'https://g8cf1njxqi.execute-api.us-east-1.amazonaws.com/prod/detokenize';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_SSN(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://23fv2q9z4i.execute-api.us-east-1.amazonaws.com/prod/detokenize';
+    AS 'https://g8cf1njxqi.execute-api.us-east-1.amazonaws.com/prod/detokenize';
 
 -- ============================================================================
 -- Tokenization Functions
@@ -52,22 +52,22 @@ CREATE OR REPLACE EXTERNAL FUNCTION DETOK_SSN(token VARCHAR)
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_NAME(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://23fv2q9z4i.execute-api.us-east-1.amazonaws.com/prod/detokenize';
+    AS 'https://g8cf1njxqi.execute-api.us-east-1.amazonaws.com/prod/detokenize';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_ID(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://23fv2q9z4i.execute-api.us-east-1.amazonaws.com/prod/detokenize';
+    AS 'https://g8cf1njxqi.execute-api.us-east-1.amazonaws.com/prod/detokenize';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_DOB(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://23fv2q9z4i.execute-api.us-east-1.amazonaws.com/prod/detokenize';
+    AS 'https://g8cf1njxqi.execute-api.us-east-1.amazonaws.com/prod/detokenize';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_SSN(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://23fv2q9z4i.execute-api.us-east-1.amazonaws.com/prod/detokenize';
+    AS 'https://g8cf1njxqi.execute-api.us-east-1.amazonaws.com/prod/detokenize';
 
 -- ============================================================================
 -- Grant Execute Permissions

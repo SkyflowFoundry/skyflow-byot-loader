@@ -902,7 +902,7 @@ func createBYOTPayload(records []Record, vaultConfig VaultConfig, config *Config
 
 	payload := map[string]interface{}{
 		"records":         recordsJSON,
-		"continueOnError": true,
+		"continueOnError": false,
 		"tokenization":    true,
 		"byot":            "ENABLE",
 	}

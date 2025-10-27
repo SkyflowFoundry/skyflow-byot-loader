@@ -288,33 +288,127 @@ class SkyflowClient {
             }));
         }
 
-        // Get client for this data type
-        const client = this.skyflowClients[dataType];
-        const { table, column, vaultId } = vault;
-
-        // Split into batches if needed
-        if (values.length > this.TOKENIZE_BATCH_SIZE) {
-            // Create batches
-            const batches = [];
-            for (let i = 0; i < values.length; i += this.TOKENIZE_BATCH_SIZE) {
-                batches.push(values.slice(i, i + this.TOKENIZE_BATCH_SIZE));
+        // Step 1: Preprocess all input values
+        // Map: transformedValue -> list of {rowIndex, originalValue}
+        const transformedMap = new Map();
+        const skippedResults = [];
+        for (const item of values) {
+            const result = this._preprocessValue(item.value, dataType);
+            if (result.skipTokenization) {
+                // Skipped: return original value as token
+                skippedResults.push({
+                    rowIndex: item.rowIndex,
+                    token: item.value,
+                    error: null
+                });
+            } else {
+                // Deduplicate by transformed value
+                if (!transformedMap.has(result.value)) {
+                    transformedMap.set(result.value, []);
+                }
+                transformedMap.get(result.value).push({
+                    rowIndex: item.rowIndex,
+                    originalValue: item.value
+                });
             }
-
-            // Process batches in parallel with concurrency control
-            const allResults = [];
-            for (let i = 0; i < batches.length; i += this.TOKENIZE_MAX_CONCURRENCY) {
-                const batchGroup = batches.slice(i, i + this.TOKENIZE_MAX_CONCURRENCY);
-                const groupPromises = batchGroup.map(batch =>
-                    this._tokenizeBatch(dataType, batch, client, vaultId, table, column)
-                );
-                const groupResults = await Promise.all(groupPromises);
-                allResults.push(...groupResults.flat());
-            }
-
-            return allResults;
         }
 
-        return await this._tokenizeBatch(dataType, values, client, vaultId, table, column);
+        // If no values to process, return skipped results only
+        if (transformedMap.size === 0) {
+            skippedResults.sort((a, b) => a.rowIndex - b.rowIndex);
+            return skippedResults;
+        }
+
+        // Step 2: Tokenize only unique transformed values (in batches)
+        const client = this.skyflowClients[dataType];
+        const { table, column, vaultId } = vault;
+        const uniqueTransformedValues = Array.from(transformedMap.keys());
+        const processedResults = [];
+
+        // Helper: batch tokenize unique transformed values
+        const tokenizeBatch = async (transformedVals) => {
+            const insertData = transformedVals.map(val => ({ [column]: val }));
+            const insertRequest = new InsertRequest(table, insertData);
+            const insertOptions = new InsertOptions();
+            insertOptions.setReturnTokens(true);
+            insertOptions.setUpsertColumn(column);
+            insertOptions.setContinueOnError(false);
+            const response = await client.vault(vaultId).insert(insertRequest, insertOptions);
+            // SDK returns results in same order as input
+            const insertedFields = response.insertedFields || [];
+            const errors = response.errors || [];
+            const batchResults = [];
+            for (let i = 0; i < transformedVals.length; i++) {
+                const val = transformedVals[i];
+                const errorForIndex = errors.find(e => e.index === i);
+                if (errorForIndex) {
+                    batchResults.push({
+                        transformedValue: val,
+                        token: null,
+                        error: errorForIndex.error || 'Unknown error'
+                    });
+                } else {
+                    const inserted = insertedFields[i];
+                    if (inserted && inserted[column]) {
+                        batchResults.push({
+                            transformedValue: val,
+                            token: inserted[column],
+                            error: null
+                        });
+                    } else {
+                        batchResults.push({
+                            transformedValue: val,
+                            token: null,
+                            error: 'No token returned from SDK'
+                        });
+                    }
+                }
+            }
+            return batchResults;
+        };
+
+        // Batch processing
+        if (uniqueTransformedValues.length > this.TOKENIZE_BATCH_SIZE) {
+            const batches = [];
+            for (let i = 0; i < uniqueTransformedValues.length; i += this.TOKENIZE_BATCH_SIZE) {
+                batches.push(uniqueTransformedValues.slice(i, i + this.TOKENIZE_BATCH_SIZE));
+            }
+            for (let i = 0; i < batches.length; i += this.TOKENIZE_MAX_CONCURRENCY) {
+                const batchGroup = batches.slice(i, i + this.TOKENIZE_MAX_CONCURRENCY);
+                const groupResults = await Promise.all(batchGroup.map(tokenizeBatch));
+                processedResults.push(...groupResults.flat());
+            }
+        } else {
+            const batchResults = await tokenizeBatch(uniqueTransformedValues);
+            processedResults.push(...batchResults);
+        }
+
+        // Step 3: Map tokens back to all original input rows
+        const tokenMap = new Map();
+        for (const result of processedResults) {
+            tokenMap.set(result.transformedValue, { token: result.token, error: result.error });
+        }
+
+        const finalResults = [];
+        // Add skipped results
+        finalResults.push(...skippedResults);
+        // Add processed results for all rowIndexes
+        for (const [transformedValue, rowInfos] of transformedMap.entries()) {
+            if (tokenMap.has(transformedValue)) {
+                const { token, error } = tokenMap.get(transformedValue);
+                for (const rowInfo of rowInfos) {
+                    finalResults.push({
+                        rowIndex: rowInfo.rowIndex,
+                        token,
+                        error
+                    });
+                }
+            }
+        }
+
+        // Sort by rowIndex to preserve original order
+        finalResults.sort((a, b) => a.rowIndex - b.rowIndex);
+        return finalResults;
     }
 
     /**
@@ -359,7 +453,7 @@ class SkyflowClient {
             const insertOptions = new InsertOptions();
             insertOptions.setReturnTokens(true); // Return tokens in response
             insertOptions.setUpsertColumn(column); // Upsert on column
-            insertOptions.setContinueOnError(true); // Continue on individual errors
+            insertOptions.setContinueOnError(false);
 
             const startTime = Date.now();
             const response = await client.vault(vaultId).insert(insertRequest, insertOptions);
@@ -403,69 +497,142 @@ class SkyflowClient {
             }));
         }
 
-        // Preprocess tokens: skip detokenization for values that would not have been tokenized
-        const preprocessedTokens = tokens.map(item => {
-            // For detokenization, treat the "token" as the value to check
-            const result = this._preprocessValue(item.token, dataType);
+        // Step 1: Build token -> rowIndexes map
+        const tokenToRowIndexes = new Map();
+        tokens.forEach(item => {
+            if (!tokenToRowIndexes.has(item.token)) {
+                tokenToRowIndexes.set(item.token, []);
+            }
+            tokenToRowIndexes.get(item.token).push(item.rowIndex);
+        });
+
+        // Step 2: Preprocess unique tokens for skip logic
+        const uniqueTokens = Array.from(tokenToRowIndexes.keys());
+        const preprocessedUniqueTokens = uniqueTokens.map(token => {
+            const result = this._preprocessValue(token, dataType);
             return {
-                ...item,
+                token,
                 preprocessedToken: result.value,
                 skipDetokenization: result.skipTokenization
             };
         });
 
-        // Separate tokens to skip and to process
-        const tokensToSkip = preprocessedTokens.filter(t => t.skipDetokenization);
-        const tokensToProcess = preprocessedTokens.filter(t => !t.skipDetokenization);
+        // Step 3: Separate tokens to skip and to process
+        const tokensToSkip = preprocessedUniqueTokens.filter(t => t.skipDetokenization);
+        const tokensToProcess = preprocessedUniqueTokens.filter(t => !t.skipDetokenization);
 
-        // Results for skipped tokens: return original value as detokenized value
-        const skippedResults = tokensToSkip.map(item => ({
-            rowIndex: item.rowIndex,
-            value: item.token,
-            error: null
-        }));
+        // Step 4: Results for skipped tokens: return original value for all rowIndexes
+        const skippedResults = [];
+        for (const item of tokensToSkip) {
+            const rowIndexes = tokenToRowIndexes.get(item.token) || [];
+            for (const rowIndex of rowIndexes) {
+                skippedResults.push({
+                    rowIndex,
+                    value: item.token,
+                    error: null
+                });
+            }
+        }
 
-        // If no tokens to process, return skipped results only
+        // If no tokens to process, return skipped results only (sorted)
         if (tokensToProcess.length === 0) {
+            skippedResults.sort((a, b) => a.rowIndex - b.rowIndex);
             return skippedResults;
         }
 
-        // Get client for this data type
+        // Step 5: Detokenize only unique tokens to process, in batches
         const client = this.skyflowClients[dataType];
         const { vaultId } = vault;
+        const processedResults = [];
 
-        // Split into batches if needed
+        // Helper: batch detokenize unique tokens
+        const detokenizeBatch = async (tokenObjs) => {
+            // Prepare input for SDK
+            const detokenizeData = tokenObjs.map(item => ({
+                token: item.token,
+                redactionType: RedactionType.PLAIN_TEXT
+            }));
+            // Call SDK
+            const detokenizeRequest = new DetokenizeRequest(detokenizeData);
+            const detokenizeOptions = new DetokenizeOptions();
+            detokenizeOptions.setContinueOnError(true);
+            const response = await client.vault(vaultId).detokenize(detokenizeRequest, detokenizeOptions);
+            // Parse SDK response
+            // SDK returns results in same order as input
+            const detokenizedFields = response.detokenizedFields || [];
+            const errors = response.errors || [];
+            const batchResults = [];
+            for (let i = 0; i < tokenObjs.length; i++) {
+                const item = tokenObjs[i];
+                const errorForIndex = errors.find(e => e.index === i);
+                if (errorForIndex) {
+                    batchResults.push({
+                        token: item.token,
+                        value: null,
+                        error: errorForIndex.error || 'Unknown error'
+                    });
+                } else {
+                    const detokenized = detokenizedFields[i];
+                    if (detokenized && detokenized.value !== undefined) {
+                        batchResults.push({
+                            token: item.token,
+                            value: detokenized.value,
+                            error: null
+                        });
+                    } else {
+                        batchResults.push({
+                            token: item.token,
+                            value: null,
+                            error: 'No value returned from SDK'
+                        });
+                    }
+                }
+            }
+            return batchResults;
+        };
+
+        // Batch processing
         if (tokensToProcess.length > this.DETOKENIZE_BATCH_SIZE) {
-            // Create batches
             const batches = [];
             for (let i = 0; i < tokensToProcess.length; i += this.DETOKENIZE_BATCH_SIZE) {
                 batches.push(tokensToProcess.slice(i, i + this.DETOKENIZE_BATCH_SIZE));
             }
-
-            // Process batches in parallel with concurrency control
-            const allResults = [];
             for (let i = 0; i < batches.length; i += this.DETOKENIZE_MAX_CONCURRENCY) {
                 const batchGroup = batches.slice(i, i + this.DETOKENIZE_MAX_CONCURRENCY);
-                const groupPromises = batchGroup.map(batch =>
-                    this._detokenizeBatch(dataType, batch, client, vaultId)
-                );
-                const groupResults = await Promise.all(groupPromises);
-                allResults.push(...groupResults.flat());
+                const groupResults = await Promise.all(batchGroup.map(detokenizeBatch));
+                processedResults.push(...groupResults.flat());
             }
-
-            // Merge skipped and processed results, maintaining original order
-            const mergedResults = [...skippedResults, ...allResults.flat()];
-            mergedResults.sort((a, b) => a.rowIndex - b.rowIndex);
-            return mergedResults;
+        } else {
+            const batchResults = await detokenizeBatch(tokensToProcess);
+            processedResults.push(...batchResults);
         }
 
-        // Process single batch
-        const processedResults = await this._detokenizeBatch(dataType, tokensToProcess, client, vaultId);
+        // Step 6: Map detokenized results back to all rowIndexes
+        const detokenizedMap = new Map();
+        for (const result of processedResults) {
+            detokenizedMap.set(result.token, { value: result.value, error: result.error });
+        }
 
-        // Merge skipped and processed results, maintaining original order
-        const mergedResults = [...skippedResults, ...processedResults];
-        mergedResults.sort((a, b) => a.rowIndex - b.rowIndex);
-        return mergedResults;
+        const finalResults = [];
+        // Add skipped results
+        finalResults.push(...skippedResults);
+        // Add processed results for all rowIndexes
+        for (const [token, rowIndexes] of tokenToRowIndexes.entries()) {
+            if (detokenizedMap.has(token)) {
+                const { value, error } = detokenizedMap.get(token);
+                for (const rowIndex of rowIndexes) {
+                    finalResults.push({
+                        rowIndex,
+                        value,
+                        error
+                    });
+                }
+            }
+        }
+
+        // Sort by rowIndex to preserve original order
+        finalResults.sort((a, b) => a.rowIndex - b.rowIndex);
+        return finalResults;
     }
 
     /**

@@ -204,7 +204,7 @@ Extract the zip and follow `Skyflow-for-Snowflake-Deployment-Guide.md` for:
 - ✅ **Batch Processing**: SDK-managed batch operations
 - ✅ **Upsert Mode**: Same plaintext always returns same token (idempotent)
 - ✅ **Multi-Vault Support**: Route different data types to separate vaults
-- ✅ **Error Handling**: Comprehensive error handling with continueOnError
+- ✅ **Error Handling**: Comprehensive error handling
 - ✅ **Official SDK**: Built on Skyflow Node.js SDK v2.0.0
 
 ### Security & Compliance
