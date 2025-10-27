@@ -879,6 +879,8 @@ aws logs tail /aws/lambda/skyflow-tokenization \
 
 ## 📊 Performance Features
 
+- Both tokenization and detokenization deduplicate input values/tokens within each Lambda batch, after applying all configured transformations.
+
 This implementation includes several optimizations for improved performance and reliability:
 
 ### AWS Credential Management
@@ -905,7 +907,10 @@ This implementation includes several optimizations for improved performance and 
 This implementation uses the **official Skyflow Node.js SDK v2.0.0**, which provides enterprise-grade features managed for you:
 
 - **HTTP/2 connection management**: SDK handles connection multiplexing and header compression automatically
-- **Built-in error handling**: Intelligent retry logic for Skyflow API errors
+- **Built-in error handling and retry logic**:  
+  - Retries transient errors (network, HTTP 5xx, HTTP 429) with exponential backoff.
+  - Does **not** retry permanent errors (HTTP 404, 400, 401, 403, etc.).
+  - All retry logic is managed by the SDK; you do not need to implement custom retries for standard use cases.
 - **Optimized request batching**: Efficient payload formatting and parsing
 - **Multi-vault support**: Seamlessly routes requests to correct vaults based on data type
 - **Both authentication methods**: Supports JWT (Service Account) and API Key out of the box
