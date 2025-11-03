@@ -53,15 +53,10 @@ SELECT DETOK_NAME(TOK_NAME('Jane Smith')) as should_be_jane_smith;
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Implementation Options
+## Implementation Features
 
-Choose the implementation that best fits your requirements:
+**Built with Official Skyflow Node.js SDK v2.0.0**
 
-### Node.js Implementation (Recommended)
-
-**Best for:** Rapid deployment, AWS Secrets Manager integration, easy maintenance
-
-**Features:**
 - ✅ Official Skyflow Node.js SDK v2.0.0
 - ✅ Simplified codebase with official support
 - ✅ AWS Secrets Manager integration (secure credential storage)
@@ -74,30 +69,9 @@ Choose the implementation that best fits your requirements:
 1. **Automated (Recommended)**: Use `deploy.sh` script for end-to-end deployment
 2. **Manual**: Follow `lambda/Skyflow-for-Snowflake-Deployment-Guide.md` for AWS CLI commands
 
-**Performance:** ~3-5 seconds for 1,000 tokens
-
-**Files:** `lambda/` directory (Node.js implementation)
-
-### Go Implementation
-
-**Best for:** Maximum performance, minimal cold start time, production scale
-
-**Features:**
-- ✅ Custom HTTP client implementation
-- ✅ Minimal cold start (~50ms vs ~150ms for Node.js)
-- ✅ Lower memory footprint
-- ✅ Compiled binary (no runtime dependencies)
-- ✅ Direct Skyflow API integration
-
-**Setup:** See `../skyflow-snowflake-tokenization-go-minimal/` directory
-
-**Performance:** ~2-3 seconds for 1,000 tokens
-
-**Files:** Separate Go repository with modular architecture
-
 ---
 
-## Quick Start (Node.js - Automated)
+## Quick Start (Automated)
 
 Get up and running in 10 minutes with the automated deployment script:
 
@@ -177,7 +151,7 @@ SELECT DETOK_NAME(TOK_NAME('John Doe'));
 
 ---
 
-## Quick Start (Node.js - Manual)
+## Quick Start (Manual)
 
 For customers who prefer AWS CLI commands over automation scripts:
 
@@ -227,13 +201,13 @@ Extract the zip and follow `Skyflow-for-Snowflake-Deployment-Guide.md` for:
 
 ### Throughput Estimates
 
-| Dataset Size | Node.js Time | Go Time | Cost (approx) |
-|-------------|-------------|---------|---------------|
-| 100 tokens | ~1-2 seconds | ~0.5-1 second | $0.0001 |
-| 1,000 tokens | ~3-5 seconds | ~2-3 seconds | $0.001 |
-| 10,000 tokens | ~20-30 seconds | ~15-20 seconds | $0.01 |
-| 100,000 tokens | ~3-5 minutes | ~2-3 minutes | $0.10 |
-| 1,000,000 tokens | ~30-50 minutes | ~20-30 minutes | $1.00 |
+| Dataset Size | Processing Time | Cost (approx) |
+|-------------|----------------|---------------|
+| 100 tokens | ~1-2 seconds | $0.0001 |
+| 1,000 tokens | ~3-5 seconds | $0.001 |
+| 10,000 tokens | ~20-30 seconds | $0.01 |
+| 100,000 tokens | ~3-5 minutes | $0.10 |
+| 1,000,000 tokens | ~30-50 minutes | $1.00 |
 
 ### SDK Integration Benefits
 - **Official Support**: Maintained by Skyflow engineering
@@ -246,13 +220,13 @@ Extract the zip and follow `Skyflow-for-Snowflake-Deployment-Guide.md` for:
 ## Project Structure
 
 ```
-skyflow-snowflake-tokenization/          # Node.js implementation (this directory)
+skyflow-snowflake-tokenization/
 ├── README.md                            # This file
 ├── QUICKSTART.md                        # 5-minute setup guide (automated)
 ├── deploy.sh                            # Deployment automation script
 ├── config.example.json                  # Configuration template
 │
-├── lambda/                              # Node.js Lambda implementation
+├── lambda/                              # Lambda implementation
 │   ├── config.js                        # AWS Secrets Manager integration
 │   ├── skyflow-client.js                # Skyflow SDK client wrapper
 │   ├── handler.js                       # Lambda entry point
@@ -266,12 +240,6 @@ skyflow-snowflake-tokenization/          # Node.js implementation (this director
 │   └── examples.sql                     # Usage examples
 │
 └── skyflow-snowflake-tokenization-customer.zip  # Customer distribution package
-
-../skyflow-snowflake-tokenization-go-minimal/   # Go implementation (separate)
-├── README.md                            # Go-specific documentation
-├── cmd/lambda/main.go                   # Go Lambda entry point
-├── internal/                            # Go modules (handler, skyflow, config)
-└── build/                               # Compiled binaries
 ```
 
 ---
@@ -578,7 +546,6 @@ See `lambda/Skyflow-for-Snowflake-Deployment-Guide.md` for complete AWS CLI comm
 - **Quick Start**: See [QUICKSTART.md](QUICKSTART.md) for 5-minute automated setup
 - **Manual Setup**: See [lambda/Skyflow-for-Snowflake-Deployment-Guide.md](lambda/Skyflow-for-Snowflake-Deployment-Guide.md)
 - **SQL Examples**: See [snowflake/examples.sql](snowflake/examples.sql) for 20+ usage examples
-- **Go Implementation**: See `../skyflow-snowflake-tokenization-go-minimal/README.md`
 
 ### Getting Help
 - **Skyflow Support**: https://support.skyflow.com
@@ -586,9 +553,6 @@ See `lambda/Skyflow-for-Snowflake-Deployment-Guide.md` for complete AWS CLI comm
 - **Snowflake Support**: https://support.snowflake.com
 
 ### Common Questions
-
-**Q: Should I use Node.js or Go?**
-A: Node.js for rapid deployment and ease of maintenance. Go for maximum performance and minimal cold starts.
 
 **Q: Can I use environment variables instead of Secrets Manager?**
 A: Yes, but Secrets Manager is recommended for secure credential storage and rotation support.
@@ -606,4 +570,4 @@ A: Automated uses `deploy.sh` for one-command deployment. Manual uses AWS CLI co
 
 **Built with ❤️ for Skyflow customers**
 
-Ready to protect your sensitive data in Snowflake? Get started with the [Quick Start](#quick-start-nodejs---automated) guide above.
+Ready to protect your sensitive data in Snowflake? Get started with the [Quick Start](#quick-start-automated) guide above.
