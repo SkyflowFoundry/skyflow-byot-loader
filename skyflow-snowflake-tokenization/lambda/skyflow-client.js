@@ -38,45 +38,12 @@ class SkyflowClient {
             'INFO': LogLevel.INFO,
             'DEBUG': LogLevel.DEBUG
         };
+        this.logLevelMap = logLevelMap;
 
-        // Initialize SDK clients for each vault
+        // Lazy initialization: SDK clients created on-demand per data type
         this.skyflowClients = {};
 
-        for (const vault of config.vaults) {
-            // SDK expects credentials wrapped in specific format
-            // For service account: { credentialsString: JSON.stringify(serviceAccountObject) }
-            // For API key: { apiKey: 'key' }
-            let credentials;
-            if (config.credentials.apiKey) {
-                // API key format
-                credentials = { apiKey: config.credentials.apiKey };
-            } else {
-                // Service account format - SDK needs credentialsString
-                credentials = { credentialsString: JSON.stringify(config.credentials) };
-            }
-
-            const vaultConfig = {
-                vaultId: vault.vaultId,
-                clusterId: vault.clusterId,
-                env: 'PROD',
-                credentials: credentials
-            };
-
-            const skyflowConfig = {
-                vaultConfigs: [vaultConfig],
-                logLevel: logLevelMap[config.logLevel] || LogLevel.INFO
-            };
-
-            console.log(`Initializing Skyflow SDK for ${vault.dataType}`, {
-                vaultId: vault.vaultId,
-                clusterId: vault.clusterId,
-                credentialType: config.credentials.apiKey ? 'API Key' : 'Service Account'
-            });
-
-            this.skyflowClients[vault.dataType] = new Skyflow(skyflowConfig);
-        }
-
-        console.log('SkyflowClient initialized with SDK', {
+        console.log('SkyflowClient initialized (lazy loading)', {
             vaultCount: config.vaults.length,
             dataTypes: Object.keys(this.vaultsByDataType),
             logLevel: config.logLevel,
@@ -89,6 +56,59 @@ class SkyflowClient {
                 maxConcurrency: this.DETOKENIZE_MAX_CONCURRENCY
             }
         });
+    }
+
+    /**
+     * Get or lazily initialize Skyflow SDK client for a specific data type
+     * @param {string} dataType - Data type (NAME, ID, DOB, SSN)
+     * @returns {Skyflow} Skyflow SDK client instance
+     * @private
+     */
+    _getOrInitializeClient(dataType) {
+        // Return cached client if already initialized
+        if (this.skyflowClients[dataType]) {
+            return this.skyflowClients[dataType];
+        }
+
+        // Find vault configuration for this data type
+        const vault = this.config.vaults.find(v => v.dataType === dataType);
+        if (!vault) {
+            throw new Error(`No vault configuration found for data type: ${dataType}`);
+        }
+
+        // SDK expects credentials wrapped in specific format
+        // For service account: { credentialsString: JSON.stringify(serviceAccountObject) }
+        // For API key: { apiKey: 'key' }
+        let credentials;
+        if (this.config.credentials.apiKey) {
+            // API key format
+            credentials = { apiKey: this.config.credentials.apiKey };
+        } else {
+            // Service account format - SDK needs credentialsString
+            credentials = { credentialsString: JSON.stringify(this.config.credentials) };
+        }
+
+        const vaultConfig = {
+            vaultId: vault.vaultId,
+            clusterId: vault.clusterId,
+            env: 'PROD',
+            credentials: credentials
+        };
+
+        const skyflowConfig = {
+            vaultConfigs: [vaultConfig],
+            logLevel: this.logLevelMap[this.config.logLevel] || LogLevel.INFO
+        };
+
+        console.log(`Initializing Skyflow SDK for ${vault.dataType}`, {
+            vaultId: vault.vaultId,
+            clusterId: vault.clusterId,
+            credentialType: this.config.credentials.apiKey ? 'API Key' : 'Service Account'
+        });
+
+        // Initialize and cache the client
+        this.skyflowClients[dataType] = new Skyflow(skyflowConfig);
+        return this.skyflowClients[dataType];
     }
 
 
@@ -320,7 +340,7 @@ class SkyflowClient {
         }
 
         // Step 2: Tokenize only unique transformed values (in batches)
-        const client = this.skyflowClients[dataType];
+        const client = this._getOrInitializeClient(dataType);
         const { table, column, vaultId } = vault;
         const uniqueTransformedValues = Array.from(transformedMap.keys());
         const processedResults = [];
@@ -541,7 +561,7 @@ class SkyflowClient {
         }
 
         // Step 5: Detokenize only unique tokens to process, in batches
-        const client = this.skyflowClients[dataType];
+        const client = this._getOrInitializeClient(dataType);
         const { vaultId } = vault;
         const processedResults = [];
 

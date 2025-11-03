@@ -316,18 +316,23 @@ Store configuration directly as Lambda environment variables (no Secrets Manager
 ### Step 3: Create AWS Secrets Manager Secret
 
 ```bash
+# Set your secret name (customize this if needed)
+export SECRET_NAME="skyflow-tokenization-config"
+
 # Create the secret in your chosen region
 aws secretsmanager create-secret \
-    --name skyflow-tokenization-config \
+    --name ${SECRET_NAME} \
     --description "Skyflow tokenization configuration" \
     --secret-string file://skyflow-config.json \
     --region ${AWS_REGION}
 
 # Verify secret was created
 aws secretsmanager describe-secret \
-    --secret-id skyflow-tokenization-config \
+    --secret-id ${SECRET_NAME} \
     --region ${AWS_REGION}
 ```
+
+**Note:** The secret name is configurable. The Lambda reads it from the `SECRETS_MANAGER_SECRET_NAME` environment variable (Step 6).
 
 **Expected output:**
 ```json
@@ -399,7 +404,7 @@ Create `secrets-manager-policy.json`:
 }
 ```
 
-**Note:** Using `*` for region allows the Lambda to work if you move it to another region later. You can restrict to your specific region for tighter security: `arn:aws:secretsmanager:${AWS_REGION}:...`
+**Note:** The `-*` suffix in the Resource ARN matches AWS's automatic random string. If you used a custom secret name, update the policy to match (e.g., `secret:my-custom-name-*`). Using `*` for region allows the Lambda to work if you move it to another region later.
 
 ```bash
 # Attach Secrets Manager policy
@@ -440,7 +445,7 @@ ls -lh function.zip
 ### Step 6: Create Lambda Function
 
 ```bash
-# Create Lambda function
+# Create Lambda function (uses SECRET_NAME from Step 3)
 aws lambda create-function \
     --function-name skyflow-tokenization \
     --runtime nodejs20.x \
@@ -450,7 +455,7 @@ aws lambda create-function \
     --timeout 60 \
     --memory-size 256 \
     --description "Skyflow tokenization and detokenization for Snowflake" \
-    --environment Variables="{SECRETS_MANAGER_SECRET_NAME=skyflow-tokenization-config}" \
+    --environment Variables="{SECRETS_MANAGER_SECRET_NAME=${SECRET_NAME}}" \
     --region ${AWS_REGION}
 
 # Verify Lambda was created
@@ -459,6 +464,8 @@ aws lambda get-function \
     --region ${AWS_REGION} \
     --query 'Configuration.[FunctionName,Runtime,Handler,State]'
 ```
+
+**Note:** The `SECRETS_MANAGER_SECRET_NAME` must match the secret name from Step 3.
 
 **Expected output:**
 ```json
@@ -836,7 +843,7 @@ aws logs tail /aws/lambda/skyflow-tokenization \
 
 # Look for:
 # - "Loading configuration..."
-# - "Loading from AWS Secrets Manager: skyflow-tokenization-config"
+# - "Loading from AWS Secrets Manager: ..."
 # - "Initialized singleton Secrets Manager client" (first invocation only)
 # - "Configuration loaded from Secrets Manager"
 # - "Credentials type: Service Account (JWT)" or "Credentials type: API Key"
@@ -876,12 +883,13 @@ This implementation includes several optimizations for improved performance and 
 This implementation uses the **official Skyflow Node.js SDK v2.0.0**, which provides enterprise-grade features managed for you:
 
 - **HTTP/2 connection management**: SDK handles connection multiplexing and header compression automatically
-- **Built-in error handling and retry logic**:  
+- **Built-in error handling and retry logic**:
   - Retries transient errors (network, HTTP 5xx, HTTP 429) with exponential backoff.
   - Does **not** retry permanent errors (HTTP 404, 400, 401, 403, etc.).
   - All retry logic is managed by the SDK; you do not need to implement custom retries for standard use cases.
 - **Optimized request batching**: Efficient payload formatting and parsing
 - **Multi-vault support**: Seamlessly routes requests to correct vaults based on data type
+- **Lazy vault initialization**: SDK clients are created on-demand per data type, reducing cold start time and memory usage
 - **Both authentication methods**: Supports JWT (Service Account) and API Key out of the box
 
 These SDK features work transparently—you get the performance benefits without additional configuration.
@@ -890,8 +898,6 @@ These SDK features work transparently—you get the performance benefits without
 - Separate batch sizes for tokenization and detokenization
 - Independent concurrency control for each operation
 - Optimized for different workload patterns
-- **Configurable batching**: Small batches (5) for low-latency tokenization, large batches (300) for high-throughput detokenization
-- **Concurrency control**: Process multiple batches in parallel with configurable limits
 
 ---
 
@@ -990,7 +996,7 @@ To update configuration:
 ```bash
 # Update your local skyflow-config.json file, then:
 aws secretsmanager update-secret \
-    --secret-id skyflow-tokenization-config \
+    --secret-id ${SECRET_NAME} \
     --secret-string file://skyflow-config.json \
     --region ${AWS_REGION}
 
@@ -1015,14 +1021,14 @@ aws lambda get-function-configuration \
 
 # Should show:
 # {
-#     "SECRETS_MANAGER_SECRET_NAME": "skyflow-tokenization-config"
+#     "SECRETS_MANAGER_SECRET_NAME": "your-secret-name"
 # }
 
-# If missing, set it:
+# If missing or incorrect, set it:
 aws lambda update-function-configuration \
     --function-name skyflow-tokenization \
     --region ${AWS_REGION} \
-    --environment Variables="{SECRETS_MANAGER_SECRET_NAME=skyflow-tokenization-config}"
+    --environment Variables="{SECRETS_MANAGER_SECRET_NAME=${SECRET_NAME}}"
 ```
 
 ### Permission Denied
@@ -1032,9 +1038,12 @@ aws lambda update-function-configuration \
 **Solution:** Check Lambda role has Secrets Manager permissions:
 
 ```bash
+# Check the IAM policy
 aws iam get-role-policy \
     --role-name skyflow-tokenization-lambda-role \
     --policy-name SecretsManagerReadPolicy
+
+# Verify the Resource ARN matches your secret name pattern
 ```
 
 ### HTTP 401 Unauthorized
@@ -1046,7 +1055,7 @@ aws iam get-role-policy \
 ```bash
 # View secret structure (be careful - shows sensitive data)
 aws secretsmanager get-secret-value \
-    --secret-id skyflow-tokenization-config \
+    --secret-id ${SECRET_NAME} \
     --region ${AWS_REGION} \
     --query 'SecretString' \
     --output text | jq '.credentials'
@@ -1126,7 +1135,7 @@ Then update the secret:
 
 ```bash
 aws secretsmanager update-secret \
-    --secret-id skyflow-tokenization-config \
+    --secret-id ${SECRET_NAME} \
     --secret-string file://skyflow-config.json \
     --region ${AWS_REGION}
 ```
@@ -1189,7 +1198,7 @@ aws iam delete-role \
 
 # Delete secret
 aws secretsmanager delete-secret \
-    --secret-id skyflow-tokenization-config \
+    --secret-id ${SECRET_NAME} \
     --force-delete-without-recovery \
     --region ${AWS_REGION}
 

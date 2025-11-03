@@ -786,6 +786,36 @@ EOF
 # ============================================================================
 # Destroy Function
 # ============================================================================
+# ============================================================================
+# Restore Placeholders Function
+# ============================================================================
+restore_placeholders() {
+    echo -e "${BLUE}Restoring placeholders in SQL template files...${NC}"
+
+    # Restore setup.sql placeholders
+    if [ -f "snowflake/setup.sql" ]; then
+        # Restore AWS account ID placeholder
+        sed -i.bak "s|arn:aws:iam::[0-9]\{12\}:role/SnowflakeAPIRole|arn:aws:iam::YOUR_AWS_ACCOUNT_ID:role/SnowflakeAPIRole|g" snowflake/setup.sql
+
+        # Restore API Gateway URL placeholder
+        sed -i.bak "s|https://[a-z0-9]\{10\}\.execute-api\.[a-z0-9-]\+\.amazonaws\.com/|https://YOUR_API_GATEWAY_ID.execute-api.YOUR_REGION.amazonaws.com/|g" snowflake/setup.sql
+
+        rm -f snowflake/setup.sql.bak
+        echo -e "  ${GREEN}✓${NC} snowflake/setup.sql"
+    fi
+
+    # Restore create_function.sql placeholders
+    if [ -f "snowflake/create_function.sql" ]; then
+        # Restore API Gateway URL placeholder in all function definitions
+        sed -i.bak "s|https://[a-z0-9]\{10\}\.execute-api\.[a-z0-9-]\+\.amazonaws\.com/prod/process|https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process|g" snowflake/create_function.sql
+
+        rm -f snowflake/create_function.sql.bak
+        echo -e "  ${GREEN}✓${NC} snowflake/create_function.sql"
+    fi
+
+    echo ""
+}
+
 destroy() {
     echo -e "${RED}Starting destruction...${NC}"
     echo ""
@@ -950,6 +980,9 @@ EOF
     rm -f deployment-info.txt
     echo -e "${GREEN}✓ Local files cleaned${NC}"
     echo ""
+
+    # Restore placeholders in SQL files
+    restore_placeholders
 
     echo -e "${GREEN}============================================================================${NC}"
     echo -e "${GREEN}Destruction Complete!${NC}"
