@@ -22,6 +22,81 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Check for help/info flags before loading config or checking AWS credentials
+case "${1}" in
+    --help|-h|help)
+        cat << 'EOF'
+Usage: ./deploy.sh {COMMAND} [OPTIONS]
+
+Main commands (default: file-based config with credentials.json):
+  --deploy                             Deploy Lambda and API Gateway (file-based config)
+  --deploy-secrets                     Deploy Lambda and API Gateway (Secrets Manager)
+  --deploy-e2e [options]               Deploy AWS + Snowflake (file-based config)
+  --deploy-e2e-secrets [options]       Deploy AWS + Snowflake (Secrets Manager)
+  --redeploy                           Destroy, redeploy, and test (file-based config)
+  --redeploy-secrets                   Destroy, redeploy, and test (Secrets Manager)
+  --redeploy-e2e [options]             Destroy, redeploy, setup Snowflake, test (file-based config)
+  --redeploy-e2e-secrets [options]     Destroy, redeploy, setup Snowflake, test (Secrets Manager)
+
+Other commands:
+  --destroy                            Destroy all AWS resources
+  --setup-permissions <user>           Grant AWS permissions to IAM user
+  --setup-snowflake [options]          Setup Snowflake integration
+  --test                               Test Snowflake integration
+
+Global options:
+  --region <region>                    AWS region to deploy to (default: from config.json or us-east-1)
+
+Options for *-e2e and setup-snowflake commands:
+  --database <name>                    Override database from config.json
+  --schema <name>                      Override schema from config.json
+
+Complete workflow (file-based config - RECOMMENDED):
+  1. ./deploy.sh --setup-permissions your-iam-username
+  2. ./deploy.sh --deploy-e2e                       # Deploy AWS + Snowflake in one command
+  3. ./deploy.sh --test
+
+Complete workflow (Secrets Manager - production):
+  1. ./deploy.sh --setup-permissions your-iam-username
+  2. ./deploy.sh --deploy-e2e-secrets               # Deploy AWS + Snowflake with Secrets Manager
+  3. ./deploy.sh --test
+
+Step-by-step (file-based config):
+  1. ./deploy.sh --setup-permissions your-iam-username
+  2. ./deploy.sh --deploy
+  3. ./deploy.sh --setup-snowflake
+  4. ./deploy.sh --test
+
+Step-by-step (Secrets Manager):
+  1. ./deploy.sh --setup-permissions your-iam-username
+  2. ./deploy.sh --deploy-secrets
+  3. ./deploy.sh --setup-snowflake
+  4. ./deploy.sh --test
+
+Examples:
+  # File-based config (default)
+  ./deploy.sh --deploy
+  ./deploy.sh --deploy-e2e
+  ./deploy.sh --deploy-e2e --database MY_DB --schema MY_SCHEMA
+  ./deploy.sh --redeploy
+  ./deploy.sh --redeploy-e2e
+
+  # Region override
+  ./deploy.sh --deploy --region us-west-2
+  ./deploy.sh --deploy-e2e --region eu-west-1
+  ./deploy.sh --deploy-secrets --region ap-southeast-1
+
+  # Secrets Manager (production)
+  ./deploy.sh --deploy-secrets
+  ./deploy.sh --deploy-e2e-secrets
+  ./deploy.sh --deploy-e2e-secrets --database MY_DB --schema MY_SCHEMA
+  ./deploy.sh --redeploy-secrets
+  ./deploy.sh --redeploy-e2e-secrets
+EOF
+        exit 0
+        ;;
+esac
+
 # Parse --region flag early (before loading config)
 REGION_OVERRIDE=""
 for arg in "$@"; do

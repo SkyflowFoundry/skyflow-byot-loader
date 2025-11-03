@@ -18,15 +18,15 @@ USE ROLE ACCOUNTADMIN;
 -- ============================================================================
 -- STEP 1: Create API Integration
 -- ============================================================================
--- Replace the following values:
+-- Replace the following values (deploy.sh does this automatically):
 --   - API_AWS_ROLE_ARN: IAM role ARN that Snowflake will assume
 --   - API_ALLOWED_PREFIXES: Your API Gateway URL prefix
 
 CREATE OR REPLACE API INTEGRATION skyflow_api_integration
     API_PROVIDER = aws_api_gateway
-    API_AWS_ROLE_ARN = 'arn:aws:iam::571930033416:role/SnowflakeAPIRole'
+    API_AWS_ROLE_ARN = 'arn:aws:iam::YOUR_AWS_ACCOUNT_ID:role/SnowflakeAPIRole'
     ENABLED = TRUE
-    API_ALLOWED_PREFIXES = ('https://g8cf1njxqi.execute-api.us-east-1.amazonaws.com/');
+    API_ALLOWED_PREFIXES = ('https://YOUR_API_GATEWAY_ID.execute-api.YOUR_REGION.amazonaws.com/');
 
 -- ============================================================================
 -- STEP 2: Get Trust Policy for AWS IAM Role
