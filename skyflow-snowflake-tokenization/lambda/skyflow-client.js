@@ -152,7 +152,7 @@ class SkyflowClient {
     }
 
     /**
-     * Preprocess value before tokenization (Protegrity-compatible behavior)
+     * Preprocess value before tokenization
      * - Validate DOB date range (must happen before stripping punctuation)
      * - Strip punctuation
      * - Check minimum length (< minLength = skip tokenization)

@@ -24,22 +24,25 @@ SELECT DETOK_NAME(TOK_NAME('Jane Smith')) as should_be_jane_smith;
 │ Snowflake Query                                             │
 │ SELECT TOK_NAME(name), DETOK_SSN(ssn_token) FROM MY_TABLE  │
 └────────────────────┬────────────────────────────────────────┘
-                     │ HTTPS (IAM Auth)
+                     │ HTTPS (IAM Auth) + Headers
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ AWS API Gateway                                             │
-│ - Routes: /tokenize/{datatype}, /detokenize/{datatype}    │
+│ - Single endpoint: /process                                 │
+│ - Headers: X-Operation, X-Data-Type                         │
+│ - Context: Current User/Role/Account                        │
 │ - IAM Role Authentication                                   │
 │ - Rate Limiting (10K requests/second)                       │
 └────────────────────┬────────────────────────────────────────┘
                      │ Invoke
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ AWS Lambda Function (Node.js 20.x or Go 1.x)               │
+│ AWS Lambda Function (Node.js 20.x)                         │
 │ - Official Skyflow Node.js SDK v2.0.0                      │
 │ - Batch processing (SDK-managed)                           │
 │ - Upsert mode for tokenization (idempotent)                │
 │ - Data-type specific vault routing                         │
+│ - Caller context logging (audit trail)                     │
 └────────────────────┬────────────────────────────────────────┘
                      │ HTTPS
                      ▼
@@ -482,12 +485,15 @@ aws lambda get-function-configuration \
 ### Debug Commands
 
 ```bash
-# Test Lambda directly
+# Test Lambda directly with headers
+# Note: Snowflake prepends 'sf-custom-' to custom headers and 'sf-context-' to context headers
 aws lambda invoke \
     --function-name skyflow-tokenization \
-    --payload '{"path":"/tokenize/name","body":"{\"data\":[[0,\"John Doe\"]]}"}' \
+    --payload '{"headers":{"sf-custom-x-operation":"tokenize","sf-custom-x-data-type":"NAME","sf-context-current-user":"TESTUSER","sf-context-current-role":"TESTROLE","sf-context-current-account":"TESTACCT"},"body":"{\"data\":[[0,\"John Doe\"]]}"}' \
     --region us-east-1 \
     response.json
+
+cat response.json
 
 # Check Lambda policy
 aws lambda get-policy \

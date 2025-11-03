@@ -474,6 +474,8 @@ aws lambda get-function \
 
 ### Step 7: Create API Gateway
 
+This implementation uses a **single API Gateway endpoint** (`/process`) that receives operation and data type via HTTP headers, with caller context automatically provided by Snowflake's CONTEXT_HEADERS.
+
 **7.1 Create REST API**
 
 ```bash
@@ -498,107 +500,42 @@ ROOT_RESOURCE_ID=$(aws apigateway get-resources \
 echo "Root Resource ID: ${ROOT_RESOURCE_ID}"
 ```
 
-**7.2 Create /tokenize resource**
+**7.2 Create single /process resource**
 
 ```bash
-# Create /tokenize resource
-TOKENIZE_RESOURCE_ID=$(aws apigateway create-resource \
+# Create /process resource (single endpoint for all operations)
+PROCESS_RESOURCE_ID=$(aws apigateway create-resource \
     --rest-api-id ${API_ID} \
     --parent-id ${ROOT_RESOURCE_ID} \
-    --path-part tokenize \
+    --path-part process \
     --region ${AWS_REGION} \
     --query 'id' \
     --output text)
 
-echo "Tokenize Resource ID: ${TOKENIZE_RESOURCE_ID}"
-```
+echo "Process Resource ID: ${PROCESS_RESOURCE_ID}"
 
-**7.3 Create /tokenize/{datatype} resources**
-
-```bash
-# Create sub-resources for each data type
-for DATA_TYPE in name id dob ssn; do
-    echo "Creating /tokenize/${DATA_TYPE}"
-
-    RESOURCE_ID=$(aws apigateway create-resource \
-        --rest-api-id ${API_ID} \
-        --parent-id ${TOKENIZE_RESOURCE_ID} \
-        --path-part ${DATA_TYPE} \
-        --region ${AWS_REGION} \
-        --query 'id' \
-        --output text)
-
-    # Create POST method
-    aws apigateway put-method \
-        --rest-api-id ${API_ID} \
-        --resource-id ${RESOURCE_ID} \
-        --http-method POST \
-        --authorization-type NONE \
-        --region ${AWS_REGION}
-
-    # Set up Lambda integration
-    aws apigateway put-integration \
-        --rest-api-id ${API_ID} \
-        --resource-id ${RESOURCE_ID} \
-        --http-method POST \
-        --type AWS_PROXY \
-        --integration-http-method POST \
-        --uri "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:function:skyflow-tokenization/invocations" \
-        --region ${AWS_REGION}
-done
-```
-
-**7.4 Create /detokenize resource**
-
-```bash
-# Create /detokenize resource
-DETOKENIZE_RESOURCE_ID=$(aws apigateway create-resource \
+# Create POST method
+aws apigateway put-method \
     --rest-api-id ${API_ID} \
-    --parent-id ${ROOT_RESOURCE_ID} \
-    --path-part detokenize \
-    --region ${AWS_REGION} \
-    --query 'id' \
-    --output text)
+    --resource-id ${PROCESS_RESOURCE_ID} \
+    --http-method POST \
+    --authorization-type NONE \
+    --region ${AWS_REGION}
 
-echo "Detokenize Resource ID: ${DETOKENIZE_RESOURCE_ID}"
+# Set up Lambda integration (AWS_PROXY automatically passes headers)
+aws apigateway put-integration \
+    --rest-api-id ${API_ID} \
+    --resource-id ${PROCESS_RESOURCE_ID} \
+    --http-method POST \
+    --type AWS_PROXY \
+    --integration-http-method POST \
+    --uri "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:function:skyflow-tokenization/invocations" \
+    --region ${AWS_REGION}
+
+echo "Configured single endpoint: /process"
 ```
 
-**7.5 Create /detokenize/{datatype} resources**
-
-```bash
-# Create sub-resources for each data type
-for DATA_TYPE in name id dob ssn; do
-    echo "Creating /detokenize/${DATA_TYPE}"
-
-    RESOURCE_ID=$(aws apigateway create-resource \
-        --rest-api-id ${API_ID} \
-        --parent-id ${DETOKENIZE_RESOURCE_ID} \
-        --path-part ${DATA_TYPE} \
-        --region ${AWS_REGION} \
-        --query 'id' \
-        --output text)
-
-    # Create POST method
-    aws apigateway put-method \
-        --rest-api-id ${API_ID} \
-        --resource-id ${RESOURCE_ID} \
-        --http-method POST \
-        --authorization-type NONE \
-        --region ${AWS_REGION}
-
-    # Set up Lambda integration
-    aws apigateway put-integration \
-        --rest-api-id ${API_ID} \
-        --resource-id ${RESOURCE_ID} \
-        --http-method POST \
-        --type AWS_PROXY \
-        --integration-http-method POST \
-        --uri "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:function:skyflow-tokenization/invocations" \
-        --region ${AWS_REGION}
-done
-```
-
-**7.6 Grant API Gateway permission to invoke Lambda**
+**7.3 Grant API Gateway permission to invoke Lambda**
 
 ```bash
 # Add Lambda permission for API Gateway
@@ -611,7 +548,7 @@ aws lambda add-permission \
     --region ${AWS_REGION}
 ```
 
-**7.7 Deploy API**
+**7.4 Deploy API**
 
 ```bash
 # Deploy API to prod stage
@@ -622,8 +559,11 @@ aws apigateway create-deployment \
     --region ${AWS_REGION}
 
 # Get API URL
-API_URL="https://${API_ID}.execute-api.${AWS_REGION}.amazonaws.com/prod"
+API_URL="https://${API_ID}.execute-api.${AWS_REGION}.amazonaws.com/prod/process"
 echo "API URL: ${API_URL}"
+echo ""
+echo "Note: Operation and data type are passed via HTTP headers (X-Operation, X-Data-Type)"
+echo "      Snowflake functions automatically include these headers in requests"
 ```
 
 ---
@@ -765,47 +705,65 @@ USE ROLE ACCOUNTADMIN;
 USE DATABASE YOUR_DATABASE;
 USE SCHEMA YOUR_SCHEMA;
 
--- Tokenization functions
+-- All functions use a single /process endpoint with HTTP headers
+
+-- Tokenization functions (with HEADERS and CONTEXT_HEADERS)
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_NAME(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/tokenize/name';
+    HEADERS = ('X-Operation' = 'tokenize', 'X-Data-Type' = 'NAME')
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_ID(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/tokenize/id';
+    HEADERS = ('X-Operation' = 'tokenize', 'X-Data-Type' = 'ID')
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_DOB(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/tokenize/dob';
+    HEADERS = ('X-Operation' = 'tokenize', 'X-Data-Type' = 'DOB')
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_SSN(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/tokenize/ssn';
+    HEADERS = ('X-Operation' = 'tokenize', 'X-Data-Type' = 'SSN')
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
--- Detokenization functions
+-- Detokenization functions (with HEADERS and CONTEXT_HEADERS)
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_NAME(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/detokenize/name';
+    HEADERS = ('X-Operation' = 'detokenize', 'X-Data-Type' = 'NAME')
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_ID(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/detokenize/id';
+    HEADERS = ('X-Operation' = 'detokenize', 'X-Data-Type' = 'ID')
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_DOB(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/detokenize/dob';
+    HEADERS = ('X-Operation' = 'detokenize', 'X-Data-Type' = 'DOB')
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_SSN(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/detokenize/ssn';
+    HEADERS = ('X-Operation' = 'detokenize', 'X-Data-Type' = 'SSN')
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 -- Verify functions were created
 SHOW FUNCTIONS LIKE 'TOK_%';
@@ -819,15 +777,26 @@ SHOW FUNCTIONS LIKE 'DETOK_%';
 ### Test Lambda Directly
 
 ```bash
-# Test tokenization
+# Test tokenization with headers
+# Note: Snowflake prepends 'sf-custom-' to custom headers and 'sf-context-' to context headers
 aws lambda invoke \
     --function-name skyflow-tokenization \
-    --payload '{"path":"/tokenize/name","body":"{\"data\":[[0,\"John Doe\"]]}"}' \
+    --payload '{"headers":{"sf-custom-x-operation":"tokenize","sf-custom-x-data-type":"NAME","sf-context-current-user":"TESTUSER","sf-context-current-role":"TESTROLE","sf-context-current-account":"TESTACCT"},"body":"{\"data\":[[0,\"John Doe\"]]}"}' \
     --region ${AWS_REGION} \
     response.json
 
 cat response.json
 # Expected: {"statusCode":200,"body":"{\"data\":[[0,\"tok_...\"]]}"}
+
+# Test detokenization with headers (replace tok_abc123 with actual token from above)
+aws lambda invoke \
+    --function-name skyflow-tokenization \
+    --payload '{"headers":{"sf-custom-x-operation":"detokenize","sf-custom-x-data-type":"NAME","sf-context-current-user":"TESTUSER","sf-context-current-role":"TESTROLE","sf-context-current-account":"TESTACCT"},"body":"{\"data\":[[0,\"tok_abc123\"]]}"}' \
+    --region ${AWS_REGION} \
+    response.json
+
+cat response.json
+# Expected: {"statusCode":200,"body":"{\"data\":[[0,\"John Doe\"]]}"}
 ```
 
 ### Test in Snowflake
@@ -930,7 +899,7 @@ These SDK features work transparently—you get the performance benefits without
 
 ### Data Transformations
 
-The Lambda function supports Protegrity-compatible data transformations that are applied before tokenization. Each vault definition can specify transformation rules:
+The Lambda function supports data transformations that are applied before tokenization. Each vault definition can specify transformation rules:
 
 ```json
 {

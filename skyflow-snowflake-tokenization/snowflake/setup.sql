@@ -81,11 +81,27 @@ GRANT USAGE ON INTEGRATION skyflow_api_integration TO ROLE YOUR_APPLICATION_ROLE
 -- 1. Run create_function.sql to create the external functions (8 functions total)
 --    - 4 detokenization functions: DETOK_NAME, DETOK_ID, DETOK_DOB, DETOK_SSN
 --    - 4 tokenization functions: TOK_NAME, TOK_ID, TOK_DOB, TOK_SSN
+--    - All functions use a single /process endpoint
 -- 2. Test with examples.sql
+--
+-- Architecture:
+-- - Single API Gateway endpoint: /process (no query parameters)
+-- - Control metadata (operation, dataType) passed via HTTP HEADERS
+-- - Caller identity (user, role, account) passed via CONTEXT_HEADERS
+-- - Provides audit trail and enables role-based authorization
+--
+-- Headers sent to Lambda (Snowflake prepends 'sf-custom-' and 'sf-context-' prefixes):
+-- - sf-custom-x-operation: tokenize | detokenize (static per function)
+-- - sf-custom-x-data-type: NAME | ID | DOB | SSN (static per function)
+-- - sf-context-current-user: <calling user> (dynamic per call)
+-- - sf-context-current-role: <calling role> (dynamic per call)
+-- - sf-context-current-account: <account id> (dynamic per call)
+-- - sf-context-current-ip-address: <caller IP address> (dynamic per call)
 --
 -- Troubleshooting:
 -- - If you get "API Integration not found", check ACCOUNTADMIN role
 -- - If function calls fail, verify the trust policy in AWS IAM
--- - Check CloudWatch logs in AWS for Lambda errors
--- - Verify API Gateway has both /tokenize and /detokenize routes
+-- - Check CloudWatch logs in AWS for Lambda errors (includes caller context)
+-- - Verify API Gateway has /process route configured
+-- - Ensure your Snowflake version supports CONTEXT_HEADERS
 -- ============================================================================

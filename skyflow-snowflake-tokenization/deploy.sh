@@ -514,14 +514,14 @@ EOF
     # Get root resource ID
     ROOT_RESOURCE_ID=$(aws apigateway get-resources --rest-api-id "$API_ID" --query 'items[?path==`/`].id' --output text)
 
-    # Create /detokenize resource
-    RESOURCE_ID=$(aws apigateway get-resources --rest-api-id "$API_ID" --query "items[?pathPart=='detokenize'].id" --output text)
+    # Create single /process resource
+    PROCESS_RESOURCE_ID=$(aws apigateway get-resources --rest-api-id "$API_ID" --query "items[?pathPart=='process'].id" --output text)
 
-    if [ -z "$RESOURCE_ID" ]; then
-        RESOURCE_ID=$(aws apigateway create-resource \
+    if [ -z "$PROCESS_RESOURCE_ID" ]; then
+        PROCESS_RESOURCE_ID=$(aws apigateway create-resource \
             --rest-api-id "$API_ID" \
             --parent-id "$ROOT_RESOURCE_ID" \
-            --path-part "detokenize" \
+            --path-part "process" \
             --query 'id' \
             --output text)
     fi
@@ -529,114 +529,21 @@ EOF
     # Create POST method
     aws apigateway put-method \
         --rest-api-id "$API_ID" \
-        --resource-id "$RESOURCE_ID" \
+        --resource-id "$PROCESS_RESOURCE_ID" \
         --http-method POST \
         --authorization-type NONE \
         --no-api-key-required 2>/dev/null || true
 
-    # Set up Lambda integration
+    # Set up Lambda integration (AWS_PROXY passes headers automatically)
     aws apigateway put-integration \
         --rest-api-id "$API_ID" \
-        --resource-id "$RESOURCE_ID" \
+        --resource-id "$PROCESS_RESOURCE_ID" \
         --http-method POST \
         --type AWS_PROXY \
         --integration-http-method POST \
         --uri "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_ARN}/invocations" 2>/dev/null || true
 
-    # Create data-type specific paths: /detokenize/name, /detokenize/id, /detokenize/dob, /detokenize/ssn
-    for DATA_TYPE in name id dob ssn; do
-        # Check if resource exists
-        SUB_RESOURCE_ID=$(aws apigateway get-resources --rest-api-id "$API_ID" --query "items[?pathPart=='${DATA_TYPE}'].id" --output text)
-
-        if [ -z "$SUB_RESOURCE_ID" ]; then
-            SUB_RESOURCE_ID=$(aws apigateway create-resource \
-                --rest-api-id "$API_ID" \
-                --parent-id "$RESOURCE_ID" \
-                --path-part "${DATA_TYPE}" \
-                --query 'id' \
-                --output text)
-        fi
-
-        # Create POST method
-        aws apigateway put-method \
-            --rest-api-id "$API_ID" \
-            --resource-id "$SUB_RESOURCE_ID" \
-            --http-method POST \
-            --authorization-type NONE \
-            --no-api-key-required 2>/dev/null || true
-
-        # Set up Lambda integration
-        aws apigateway put-integration \
-            --rest-api-id "$API_ID" \
-            --resource-id "$SUB_RESOURCE_ID" \
-            --http-method POST \
-            --type AWS_PROXY \
-            --integration-http-method POST \
-            --uri "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_ARN}/invocations" 2>/dev/null || true
-    done
-
-    # Create /tokenize resource
-    TOKENIZE_RESOURCE_ID=$(aws apigateway get-resources --rest-api-id "$API_ID" --query "items[?pathPart=='tokenize'].id" --output text)
-
-    if [ -z "$TOKENIZE_RESOURCE_ID" ]; then
-        TOKENIZE_RESOURCE_ID=$(aws apigateway create-resource \
-            --rest-api-id "$API_ID" \
-            --parent-id "$ROOT_RESOURCE_ID" \
-            --path-part "tokenize" \
-            --query 'id' \
-            --output text)
-    fi
-
-    # Create POST method for /tokenize
-    aws apigateway put-method \
-        --rest-api-id "$API_ID" \
-        --resource-id "$TOKENIZE_RESOURCE_ID" \
-        --http-method POST \
-        --authorization-type NONE \
-        --no-api-key-required 2>/dev/null || true
-
-    # Set up Lambda integration for /tokenize
-    aws apigateway put-integration \
-        --rest-api-id "$API_ID" \
-        --resource-id "$TOKENIZE_RESOURCE_ID" \
-        --http-method POST \
-        --type AWS_PROXY \
-        --integration-http-method POST \
-        --uri "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_ARN}/invocations" 2>/dev/null || true
-
-    # Create data-type specific paths: /tokenize/name, /tokenize/id, /tokenize/dob, /tokenize/ssn
-    for DATA_TYPE in name id dob ssn; do
-        # Check if resource exists
-        TOKENIZE_SUB_RESOURCE_ID=$(aws apigateway get-resources --rest-api-id "$API_ID" --query "items[?pathPart=='${DATA_TYPE}' && parentId=='${TOKENIZE_RESOURCE_ID}'].id" --output text)
-
-        if [ -z "$TOKENIZE_SUB_RESOURCE_ID" ]; then
-            TOKENIZE_SUB_RESOURCE_ID=$(aws apigateway create-resource \
-                --rest-api-id "$API_ID" \
-                --parent-id "$TOKENIZE_RESOURCE_ID" \
-                --path-part "${DATA_TYPE}" \
-                --query 'id' \
-                --output text)
-        fi
-
-        # Create POST method
-        aws apigateway put-method \
-            --rest-api-id "$API_ID" \
-            --resource-id "$TOKENIZE_SUB_RESOURCE_ID" \
-            --http-method POST \
-            --authorization-type NONE \
-            --no-api-key-required 2>/dev/null || true
-
-        # Set up Lambda integration
-        aws apigateway put-integration \
-            --rest-api-id "$API_ID" \
-            --resource-id "$TOKENIZE_SUB_RESOURCE_ID" \
-            --http-method POST \
-            --type AWS_PROXY \
-            --integration-http-method POST \
-            --uri "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_ARN}/invocations" 2>/dev/null || true
-    done
-
-    echo -e "${GREEN}✓ API Gateway configured (with tokenize and detokenize data-type paths)${NC}"
+    echo -e "${GREEN}✓ API Gateway configured with single /process endpoint${NC}"
     echo ""
 
     # Step 7: Grant API Gateway permission to invoke Lambda
@@ -660,7 +567,7 @@ EOF
         --stage-name prod \
         --description "Production deployment" > /dev/null
 
-    API_URL="https://${API_ID}.execute-api.${AWS_REGION}.amazonaws.com/prod/detokenize"
+    API_URL="https://${API_ID}.execute-api.${AWS_REGION}.amazonaws.com/prod/process"
 
     echo -e "${GREEN}✓ API deployed${NC}"
     echo ""
@@ -1290,10 +1197,8 @@ EOF
 
     echo -e "${YELLOW}[4/4]${NC} Creating external functions..."
 
-    # Get API Gateway details
-    API_BASE_URL=$(echo "${API_URL}" | sed 's|/detokenize$||')
-
     # Create functions - 4 detokenize + 4 tokenize (8 total)
+    # Uses headers for operation/dataType + context headers for audit
     cat > .snowflake-create-function.sql <<EOF
 USE ROLE ${SF_ROLE};
 USE DATABASE ${SF_DATABASE};
@@ -1303,43 +1208,83 @@ USE SCHEMA ${SF_SCHEMA};
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_NAME(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS '${API_BASE_URL}/detokenize/name';
+    HEADERS = (
+        'X-Operation' = 'detokenize',
+        'X-Data-Type' = 'NAME'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS '${API_URL}';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_ID(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS '${API_BASE_URL}/detokenize/id';
+    HEADERS = (
+        'X-Operation' = 'detokenize',
+        'X-Data-Type' = 'ID'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS '${API_URL}';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_DOB(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS '${API_BASE_URL}/detokenize/dob';
+    HEADERS = (
+        'X-Operation' = 'detokenize',
+        'X-Data-Type' = 'DOB'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS '${API_URL}';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_SSN(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS '${API_BASE_URL}/detokenize/ssn';
+    HEADERS = (
+        'X-Operation' = 'detokenize',
+        'X-Data-Type' = 'SSN'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS '${API_URL}';
 
 -- Tokenization functions
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_NAME(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS '${API_BASE_URL}/tokenize/name';
+    HEADERS = (
+        'X-Operation' = 'tokenize',
+        'X-Data-Type' = 'NAME'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS '${API_URL}';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_ID(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS '${API_BASE_URL}/tokenize/id';
+    HEADERS = (
+        'X-Operation' = 'tokenize',
+        'X-Data-Type' = 'ID'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS '${API_URL}';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_DOB(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS '${API_BASE_URL}/tokenize/dob';
+    HEADERS = (
+        'X-Operation' = 'tokenize',
+        'X-Data-Type' = 'DOB'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS '${API_URL}';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_SSN(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS '${API_BASE_URL}/tokenize/ssn';
+    HEADERS = (
+        'X-Operation' = 'tokenize',
+        'X-Data-Type' = 'SSN'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS '${API_URL}';
 EOF
 
     set +e  # Temporarily disable exit on error

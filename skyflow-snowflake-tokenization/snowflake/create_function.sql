@@ -2,6 +2,7 @@
 -- Create Skyflow Tokenize and Detokenize External Functions
 -- ============================================================================
 -- Creates external functions for both tokenization and detokenization.
+-- Uses HTTP headers for control metadata and CONTEXT_HEADERS for audit trail.
 --
 -- Prerequisites:
 -- 1. API integration created (run setup.sql first)
@@ -21,53 +22,95 @@ USE SCHEMA YOUR_SCHEMA;
 -- ============================================================================
 -- Detokenization Functions
 -- ============================================================================
--- Data-type specific detokenization (each uses specific vault and table)
+-- Control metadata (operation, dataType) sent via HEADERS
+-- Caller identity (user, role, account) sent via CONTEXT_HEADERS
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_NAME(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://g8cf1njxqi.execute-api.us-east-1.amazonaws.com/prod/detokenize';
+    HEADERS = (
+        'X-Operation' = 'detokenize',
+        'X-Data-Type' = 'NAME'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_ID(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://g8cf1njxqi.execute-api.us-east-1.amazonaws.com/prod/detokenize';
+    HEADERS = (
+        'X-Operation' = 'detokenize',
+        'X-Data-Type' = 'ID'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_DOB(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://g8cf1njxqi.execute-api.us-east-1.amazonaws.com/prod/detokenize';
+    HEADERS = (
+        'X-Operation' = 'detokenize',
+        'X-Data-Type' = 'DOB'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_SSN(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://g8cf1njxqi.execute-api.us-east-1.amazonaws.com/prod/detokenize';
+    HEADERS = (
+        'X-Operation' = 'detokenize',
+        'X-Data-Type' = 'SSN'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 -- ============================================================================
 -- Tokenization Functions
 -- ============================================================================
--- Data-type specific tokenization (each uses specific vault and table)
+-- Control metadata (operation, dataType) sent via HEADERS
+-- Caller identity (user, role, account) sent via CONTEXT_HEADERS
 -- Uses upsert by default - returns existing token for duplicate values
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_NAME(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://g8cf1njxqi.execute-api.us-east-1.amazonaws.com/prod/detokenize';
+    HEADERS = (
+        'X-Operation' = 'tokenize',
+        'X-Data-Type' = 'NAME'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_ID(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://g8cf1njxqi.execute-api.us-east-1.amazonaws.com/prod/detokenize';
+    HEADERS = (
+        'X-Operation' = 'tokenize',
+        'X-Data-Type' = 'ID'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_DOB(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://g8cf1njxqi.execute-api.us-east-1.amazonaws.com/prod/detokenize';
+    HEADERS = (
+        'X-Operation' = 'tokenize',
+        'X-Data-Type' = 'DOB'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_SSN(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://g8cf1njxqi.execute-api.us-east-1.amazonaws.com/prod/detokenize';
+    HEADERS = (
+        'X-Operation' = 'tokenize',
+        'X-Data-Type' = 'SSN'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 -- ============================================================================
 -- Grant Execute Permissions
@@ -126,6 +169,20 @@ SHOW FUNCTIONS LIKE 'DETOK_%';
 -- - NULL ON NULL INPUT: Returns NULL if input is NULL (no API call)
 -- - IMMUTABLE: Snowflake can cache results (use VOLATILE if tokens change)
 --
+-- Architecture:
+-- - All 8 functions use a single API Gateway endpoint: /process
+-- - Control metadata (operation, dataType) passed via HTTP HEADERS (static per function)
+-- - Caller identity (user, role, account) passed via CONTEXT_HEADERS (dynamic per call)
+-- - This provides audit trail and enables role-based authorization in Lambda
+--
+-- Headers sent to Lambda (Snowflake prepends 'sf-custom-' and 'sf-context-' prefixes):
+-- - sf-custom-x-operation: tokenize | detokenize
+-- - sf-custom-x-data-type: NAME | ID | DOB | SSN
+-- - sf-context-current-user: <calling Snowflake user>
+-- - sf-context-current-role: <calling Snowflake role>
+-- - sf-context-current-account: <Snowflake account identifier>
+-- - sf-context-current-ip-address: <caller IP address>
+--
 -- Tokenization:
 -- - Uses upsert mode: Same value returns same token (idempotent)
 -- - Each data type (NAME, ID, DOB, SSN) uses a separate Skyflow vault/table
@@ -134,16 +191,24 @@ SHOW FUNCTIONS LIKE 'DETOK_%';
 -- Detokenization:
 -- - Retrieves original plaintext value from token
 -- - Each data type routes to correct vault/table
+-- - Caller context can be used for authorization/audit
 --
 -- Performance tips:
 -- - Snowflake automatically batches external function calls
--- - Lambda processes up to 200 records per batch
--- - Processes up to 10 batches concurrently
+-- - Lambda processes records in configurable batch sizes
+-- - Configurable concurrency for parallel batch processing
 -- - For large datasets, consider using WHERE clauses to limit rows
+--
+-- Security & Audit:
+-- - Lambda receives caller identity for every request
+-- - Can implement role-based access control (RBAC) in Lambda
+-- - CloudWatch logs include user/role/account for audit trail
+-- - Consider logging caller context (without PII) for compliance
 --
 -- Troubleshooting:
 -- - If you get "Function not found", check database/schema context
 -- - If calls fail, check CloudWatch logs in AWS Lambda
--- - Verify API Gateway URL is correct (including stage)
+-- - Verify API Gateway URL points to /process endpoint
 -- - Check that vault IDs and table names match your Skyflow configuration
+-- - Verify CONTEXT_HEADERS are supported (Snowflake version requirement)
 -- ============================================================================

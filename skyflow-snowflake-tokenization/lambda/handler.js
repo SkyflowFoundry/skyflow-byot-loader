@@ -64,45 +64,39 @@ async function getSkyflowClient() {
  * Parse Snowflake request and extract tokens for detokenization
  *
  * @param {Object} event - Lambda event from Snowflake
- * @returns {Array} Array of {rowIndex, token, vaultId}
+ * @param {string} dataType - Data type from header
+ * @returns {Array} Array of {rowIndex, token, vaultId, dataType}
  */
-function parseDetokenizeRequest(event) {
+function parseDetokenizeRequest(event, dataType) {
     if (!event || !event.data || !Array.isArray(event.data)) {
         throw new Error('Invalid Snowflake request format: missing "data" array');
     }
 
-    // Track unique data types for logging
-    const dataTypesFound = new Set();
+    const dataTypeUpper = dataType.toUpperCase();
 
     const tokens = event.data.map(row => {
         if (!Array.isArray(row) || row.length < 2) {
             throw new Error(`Invalid row format: ${JSON.stringify(row)}`);
         }
 
-        const [rowIndex, token, dataTypeOrVaultId] = row;
+        const [rowIndex, token] = row;
 
-        // Resolve vault ID and data type
-        let vaultId = dataTypeOrVaultId;
-        let dataType = null;
-
-        if (dataTypeOrVaultId && config.vaultsByDataType[dataTypeOrVaultId.toUpperCase()]) {
-            const vault = config.vaultsByDataType[dataTypeOrVaultId.toUpperCase()];
+        // Resolve vault ID from data type
+        let vaultId = null;
+        if (config.vaultsByDataType[dataTypeUpper]) {
+            const vault = config.vaultsByDataType[dataTypeUpper];
             vaultId = vault.vaultId;
-            dataType = dataTypeOrVaultId.toUpperCase();
-            dataTypesFound.add(dataType);
         }
 
         return {
             rowIndex,
             token,
             vaultId: vaultId || null,
-            dataType: dataType
+            dataType: dataTypeUpper
         };
     });
 
-    console.log(`Parsed ${tokens.length} tokens from Snowflake detokenize request`, {
-        dataTypes: Array.from(dataTypesFound)
-    });
+    console.log(`Parsed ${tokens.length} tokens from Snowflake detokenize request for ${dataType}`);
     return tokens;
 }
 
@@ -185,37 +179,69 @@ function formatTokenizeResponse(results) {
 }
 
 /**
- * Extract data type from API Gateway path
+ * Extract operation from HTTP headers
  *
- * Examples:
- *   /tokenize/name -> NAME
- *   /detokenize/ssn -> SSN
+ * Snowflake prepends 'sf-custom-' to all custom headers specified in HEADERS clause.
+ * See: https://docs.snowflake.com/en/sql-reference/sql/create-external-function
  *
- * @param {string} path - API Gateway path
- * @returns {string|null} Data type or null
+ * @param {Object} event - Lambda event
+ * @returns {string} 'tokenize' or 'detokenize'
  */
-function extractDataTypeFromPath(path) {
-    const match = path.match(/\/(tokenize|detokenize)\/(\w+)$/);
-    if (match) {
-        return match[2].toUpperCase();
+function extractOperation(event) {
+    // API Gateway may normalize headers to lowercase, check both
+    const headers = event.headers || {};
+    const operation = headers['sf-custom-x-operation'] || headers['Sf-Custom-X-Operation'];
+
+    if (!operation) {
+        throw new Error('Missing required header: sf-custom-x-operation (from Snowflake HEADERS clause)');
     }
-    return null;
+
+    if (operation !== 'tokenize' && operation !== 'detokenize') {
+        throw new Error(`Invalid operation: ${operation}. Must be 'tokenize' or 'detokenize'`);
+    }
+
+    return operation.toLowerCase();
 }
 
 /**
- * Determine operation from API Gateway path
+ * Extract data type from HTTP headers
  *
- * @param {string} path - API Gateway path
- * @returns {string} 'tokenize' or 'detokenize'
+ * Snowflake prepends 'sf-custom-' to all custom headers specified in HEADERS clause.
+ * See: https://docs.snowflake.com/en/sql-reference/sql/create-external-function
+ *
+ * @param {Object} event - Lambda event
+ * @returns {string} Data type in uppercase (NAME, ID, DOB, SSN)
  */
-function determineOperation(path) {
-    if (path.includes('/tokenize')) {
-        return 'tokenize';
+function extractDataType(event) {
+    // API Gateway may normalize headers to lowercase, check both
+    const headers = event.headers || {};
+    const dataType = headers['sf-custom-x-data-type'] || headers['Sf-Custom-X-Data-Type'];
+
+    if (!dataType) {
+        throw new Error('Missing required header: sf-custom-x-data-type (from Snowflake HEADERS clause)');
     }
-    if (path.includes('/detokenize')) {
-        return 'detokenize';
-    }
-    throw new Error('Invalid path: must include /tokenize or /detokenize');
+
+    return dataType.toUpperCase();
+}
+
+/**
+ * Extract Snowflake caller context from CONTEXT_HEADERS
+ *
+ * Snowflake prepends 'sf-context-' to context function names when creating HTTP headers.
+ * See: https://docs.snowflake.com/en/sql-reference/sql/create-external-function
+ *
+ * @param {Object} event - Lambda event
+ * @returns {Object} Caller context {user, role, account, ipAddress}
+ */
+function extractCallerContext(event) {
+    const headers = event.headers || {};
+
+    return {
+        user: headers['sf-context-current-user'] || headers['Sf-Context-Current-User'] || 'UNKNOWN',
+        role: headers['sf-context-current-role'] || headers['Sf-Context-Current-Role'] || 'UNKNOWN',
+        account: headers['sf-context-current-account'] || headers['Sf-Context-Current-Account'] || 'UNKNOWN',
+        ipAddress: headers['sf-context-current-ip-address'] || headers['Sf-Context-Current-Ip-Address'] || 'UNKNOWN'
+    };
 }
 
 /**
@@ -229,34 +255,30 @@ async function handler(event, context) {
     console.log('Lambda invoked', {
         requestId: context.requestId,
         functionName: context.functionName,
-        path: event.path || event.rawPath,
+        headers: event.headers,
         remainingTimeMs: context.getRemainingTimeInMillis()
     });
 
     try {
-        // Determine operation and data type from path
-        const path = event.path || event.rawPath || '';
-        const operation = determineOperation(path);
-        const dataTypeFromPath = extractDataTypeFromPath(path);
+        // Extract operation and data type from headers
+        const operation = extractOperation(event);
+        const dataType = extractDataType(event);
+        const caller = extractCallerContext(event);
 
-        console.log(`Operation: ${operation}, Data Type: ${dataTypeFromPath || 'not specified'}`);
+        console.log(`Operation: ${operation}, Data Type: ${dataType}`, {
+            caller: {
+                user: caller.user,
+                role: caller.role,
+                account: caller.account,
+                ipAddress: caller.ipAddress
+            }
+        });
 
         // Parse request body (API Gateway format)
         let requestData = event;
         if (event.body && typeof event.body === 'string') {
             console.log('Parsing JSON body from API Gateway');
             requestData = JSON.parse(event.body);
-        }
-
-        // If we have a data type from the path, inject it into each row if needed
-        if (dataTypeFromPath && requestData.data && Array.isArray(requestData.data)) {
-            requestData.data = requestData.data.map(row => {
-                // If row only has 2 elements (rowIndex, token/value), add dataType as 3rd element
-                if (Array.isArray(row) && row.length === 2) {
-                    return [...row, dataTypeFromPath];
-                }
-                return row;
-            });
         }
 
         // Handle empty data
@@ -277,13 +299,9 @@ async function handler(event, context) {
         // Route to appropriate operation
         if (operation === 'tokenize') {
             // Tokenization
-            if (!dataTypeFromPath) {
-                throw new Error('Data type not specified in path for tokenization');
-            }
+            const values = parseTokenizeRequest(requestData, dataType);
 
-            const values = parseTokenizeRequest(requestData, dataTypeFromPath);
-
-            console.log(`Starting tokenization of ${values.length} values for ${dataTypeFromPath}`);
+            console.log(`Starting tokenization of ${values.length} values for ${dataType}`);
             const startTime = Date.now();
 
             const results = await client.tokenizeBatch(values);
@@ -311,7 +329,7 @@ async function handler(event, context) {
 
         } else {
             // Detokenization
-            const tokens = parseDetokenizeRequest(requestData);
+            const tokens = parseDetokenizeRequest(requestData, dataType);
 
             console.log(`Starting detokenization of ${tokens.length} tokens`);
             const startTime = Date.now();
