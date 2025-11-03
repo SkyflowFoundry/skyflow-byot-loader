@@ -188,9 +188,14 @@ function formatTokenizeResponse(results) {
  * @returns {string} 'tokenize' or 'detokenize'
  */
 function extractOperation(event) {
-    // API Gateway may normalize headers to lowercase, check both
+    // Convert all header keys to lowercase for case-insensitive lookup
     const headers = event.headers || {};
-    const operation = headers['sf-custom-x-operation'] || headers['Sf-Custom-X-Operation'];
+    const lowerHeaders = Object.keys(headers).reduce((acc, key) => {
+        acc[key.toLowerCase()] = headers[key];
+        return acc;
+    }, {});
+
+    const operation = lowerHeaders['sf-custom-x-operation'];
 
     if (!operation) {
         throw new Error('Missing required header: sf-custom-x-operation (from Snowflake HEADERS clause)');
@@ -213,9 +218,14 @@ function extractOperation(event) {
  * @returns {string} Data type in uppercase (NAME, ID, DOB, SSN)
  */
 function extractDataType(event) {
-    // API Gateway may normalize headers to lowercase, check both
+    // Convert all header keys to lowercase for case-insensitive lookup
     const headers = event.headers || {};
-    const dataType = headers['sf-custom-x-data-type'] || headers['Sf-Custom-X-Data-Type'];
+    const lowerHeaders = Object.keys(headers).reduce((acc, key) => {
+        acc[key.toLowerCase()] = headers[key];
+        return acc;
+    }, {});
+
+    const dataType = lowerHeaders['sf-custom-x-data-type'];
 
     if (!dataType) {
         throw new Error('Missing required header: sf-custom-x-data-type (from Snowflake HEADERS clause)');
@@ -234,13 +244,18 @@ function extractDataType(event) {
  * @returns {Object} Caller context {user, role, account, ipAddress}
  */
 function extractCallerContext(event) {
+    // Convert all header keys to lowercase for case-insensitive lookup
     const headers = event.headers || {};
+    const lowerHeaders = Object.keys(headers).reduce((acc, key) => {
+        acc[key.toLowerCase()] = headers[key];
+        return acc;
+    }, {});
 
     return {
-        user: headers['sf-context-current-user'] || headers['Sf-Context-Current-User'] || 'UNKNOWN',
-        role: headers['sf-context-current-role'] || headers['Sf-Context-Current-Role'] || 'UNKNOWN',
-        account: headers['sf-context-current-account'] || headers['Sf-Context-Current-Account'] || 'UNKNOWN',
-        ipAddress: headers['sf-context-current-ip-address'] || headers['Sf-Context-Current-Ip-Address'] || 'UNKNOWN'
+        user: lowerHeaders['sf-context-current-user'] || 'UNKNOWN',
+        role: lowerHeaders['sf-context-current-role'] || 'UNKNOWN',
+        account: lowerHeaders['sf-context-current-account'] || 'UNKNOWN',
+        ipAddress: lowerHeaders['sf-context-current-ip-address'] || 'UNKNOWN'
     };
 }
 
@@ -255,7 +270,6 @@ async function handler(event, context) {
     console.log('Lambda invoked', {
         requestId: context.requestId,
         functionName: context.functionName,
-        headers: event.headers,
         remainingTimeMs: context.getRemainingTimeInMillis()
     });
 
