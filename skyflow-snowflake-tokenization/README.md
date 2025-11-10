@@ -8,7 +8,7 @@ This project provides both **tokenization** and **detokenization** capabilities 
 
 ```sql
 -- Tokenize sensitive data
-SELECT TOK_NAME('John Doe'), TOK_SSN('123-45-6789');
+SELECT TOK_NAME('John Doe'), TOK_SSN('123-45-6789'), TOK_DOB_PRESERVE_YYYY('1984-04-25');
 
 -- Detokenize for authorized access
 SELECT DETOK_NAME(name_token), DETOK_SSN(ssn_token) FROM patients;
@@ -236,7 +236,7 @@ skyflow-snowflake-tokenization/
 │
 ├── snowflake/                           # Snowflake SQL scripts
 │   ├── setup.sql                        # API integration setup
-│   ├── create_function.sql              # External function definitions (8 functions)
+│   ├── create_function.sql              # External function definitions (10 functions)
 │   └── examples.sql                     # Usage examples
 │
 └── skyflow-snowflake-tokenization-customer.zip  # Customer distribution package
@@ -254,6 +254,7 @@ SELECT TOK_NAME('John Doe') as name_token;
 SELECT TOK_SSN('123-45-6789') as ssn_token;
 SELECT TOK_DOB('1990-01-01') as dob_token;
 SELECT TOK_ID('12345') as id_token;
+SELECT TOK_DOB_PRESERVE_YYYY('1984-04-25') as dob_year_preserved_token;
 ```
 
 ### Basic Detokenization
@@ -274,6 +275,7 @@ SELECT
     TOK_NAME(patient_name) as name_token,
     TOK_SSN(ssn) as ssn_token,
     TOK_DOB(date_of_birth) as dob_token,
+    TOK_DOB_PRESERVE_YYYY(date_of_birth) as dob_year_preserved_token,
     admission_date,
     department
 FROM patients_raw;
@@ -287,7 +289,8 @@ SELECT
     patient_id,
     DETOK_NAME(name_token) as patient_name,
     DETOK_SSN(ssn_token) as ssn,
-    DETOK_DOB(dob_token) as date_of_birth
+    DETOK_DOB(dob_token) as date_of_birth,
+    DETOK_DOB_PRESERVE_YYYY(dob_year_preserved_token) as dob_year_preserved
 FROM patients_tokenized
 WHERE admission_date > '2024-01-01'
 LIMIT 100;
@@ -315,7 +318,8 @@ SELECT
     customer_id,
     TOK_NAME(name) as name_token,
     TOK_SSN(ssn) as ssn_token,
-    TOK_DOB(dob) as dob_token
+    TOK_DOB(dob) as dob_token,
+    TOK_DOB_PRESERVE_YYYY(dob) as dob_year_preserved_token
 FROM customers
 LIMIT 10000;  -- Processes ~100-200 at a time internally
 ```

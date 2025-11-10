@@ -4,7 +4,7 @@
  * Handles tokenization and detokenization using official Skyflow Node.js SDK v2.0.0
  */
 
-const { Skyflow, LogLevel, RedactionType, InsertRequest, InsertOptions, DetokenizeRequest, DetokenizeOptions } = require('skyflow-node');
+const { Skyflow, LogLevel, RedactionType, InsertRequest, InsertOptions, DetokenizeRequest, DetokenizeOptions, QueryRequest } = require('skyflow-node');
 
 /**
  * Skyflow Client for tokenization and detokenization
@@ -294,10 +294,132 @@ class SkyflowClient {
     }
 
     /**
+     * Tokenize DOB_PRESERVE_YYYY values using 2-call approach:
+     * Call 1: Insert dob_full + dob_year to get FPT token back
+     * Call 2: Upsert with extracted month_day_token
+     * @private
+     */
+    async _tokenizeDOBPreserveYYYYGroup(values) {
+        const vault = this.vaultsByDataType['DOB_PRESERVE_YYYY'];
+        if (!vault) {
+            console.error('No vault configured for DOB_PRESERVE_YYYY');
+            return values.map(v => ({
+                rowIndex: v.rowIndex,
+                token: null,
+                error: 'No vault configured for DOB_PRESERVE_YYYY'
+            }));
+        }
+
+        const client = this._getOrInitializeClient('DOB_PRESERVE_YYYY');
+        const { vaultId, table, columns } = vault;
+        const results = [];
+
+        // Process each value (could batch this later for performance)
+        for (const item of values) {
+            try {
+                const dobFull = item.value; // e.g., "1984-04-25"
+
+                // Validate date format
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(dobFull)) {
+                    results.push({
+                        rowIndex: item.rowIndex,
+                        token: null,
+                        error: `Invalid date format: ${dobFull}. Expected YYYY-MM-DD`
+                    });
+                    continue;
+                }
+
+                const dobYear = dobFull.substring(0, 4); // Extract "1984"
+
+                // Call 1: Insert dob_full + dob_year to get FPT token
+                const insertData1 = [{
+                    [columns.dob_year]: dobYear,
+                    [columns.dob_full]: dobFull
+                }];
+
+                const insertRequest1 = new InsertRequest(table, insertData1);
+                const insertOptions1 = new InsertOptions();
+                insertOptions1.setReturnTokens(true);
+                insertOptions1.setUpsertColumn(columns.dob_full);
+                insertOptions1.setContinueOnError(false);
+
+                console.log(`DOB_PRESERVE_YYYY Call 1: Inserting ${dobFull} to get FPT token`);
+                const response1 = await client.vault(vaultId).insert(insertRequest1, insertOptions1);
+
+                // Extract FPT token from response
+                const insertedFields1 = response1.insertedFields || [];
+                if (!insertedFields1[0] || !insertedFields1[0][columns.dob_full]) {
+                    results.push({
+                        rowIndex: item.rowIndex,
+                        token: null,
+                        error: 'No FPT token returned from Call 1'
+                    });
+                    continue;
+                }
+
+                const fptToken = insertedFields1[0][columns.dob_full]; // e.g., "2770-05-16" (fully tokenized date)
+                console.log(`DOB_PRESERVE_YYYY FPT token received: ${fptToken}`);
+
+                // Extract tokenized month_day from FPT token (MM-DD portion)
+                // Note: FPT tokenizes the entire date, so we extract just the MM-DD part
+                const tokenizedMonthDay = fptToken.substring(5); // Extract "05-16" from "2770-05-16"
+                console.log(`DOB_PRESERVE_YYYY Extracted tokenized month-day: ${tokenizedMonthDay}`);
+
+                // Call 2: Upsert the full record with month_day_token
+                // This populates all three fields: dob_full, dob_year, month_day_token
+                const insertData2 = [{
+                    [columns.dob_year]: dobYear,
+                    [columns.dob_full]: dobFull,
+                    [columns.month_day_token]: tokenizedMonthDay
+                }];
+
+                const insertRequest2 = new InsertRequest(table, insertData2);
+                const insertOptions2 = new InsertOptions();
+                insertOptions2.setReturnTokens(true); // Get skyflow_id as token
+                insertOptions2.setUpsertColumn(columns.dob_full);
+                insertOptions2.setContinueOnError(false);
+
+                console.log(`DOB_PRESERVE_YYYY Call 2: Upserting with month_day_token=${tokenizedMonthDay}`);
+                const response2 = await client.vault(vaultId).insert(insertRequest2, insertOptions2);
+
+                console.log(`DOB_PRESERVE_YYYY Call 2 completed successfully`);
+
+                // Construct final token: original year + tokenized MM-DD
+                // Format: YYYY-MM-DD (clean date format with year preserved)
+                const finalToken = `${dobYear}-${tokenizedMonthDay}`;
+                console.log(`DOB_PRESERVE_YYYY Final token (year preserved): ${finalToken}`);
+
+                // Return the reconstructed token to Snowflake
+                results.push({
+                    rowIndex: item.rowIndex,
+                    token: finalToken, // e.g., "2025-05-16"
+                    error: null
+                });
+
+            } catch (error) {
+                console.error(`DOB_PRESERVE_YYYY tokenization failed for ${item.value}:`, error.message);
+                results.push({
+                    rowIndex: item.rowIndex,
+                    token: null,
+                    error: error.message
+                });
+            }
+        }
+
+        console.log(`DOB_PRESERVE_YYYY tokenization complete: ${results.length} results`);
+        return results;
+    }
+
+    /**
      * Tokenize a group of values for a specific data type
      * @private
      */
     async _tokenizeDataTypeGroup(dataType, values) {
+        // Special handling for DOB_PRESERVE_YYYY (format-preserving date tokenization)
+        if (dataType === 'DOB_PRESERVE_YYYY') {
+            return await this._tokenizeDOBPreserveYYYYGroup(values);
+        }
+
         const vault = this.vaultsByDataType[dataType];
         if (!vault) {
             console.error(`No vault configured for data type: ${dataType}`);
@@ -503,10 +625,116 @@ class SkyflowClient {
     }
 
     /**
+     * Detokenize DOB_PRESERVE_YYYY tokens using SDK query method:
+     * Parse token format "YYYY-MM-DD" to extract year and month_day_token
+     * Query Skyflow: WHERE month_day_token='MM-DD' AND dob_year='YYYY'
+     * Return original dob_full value
+     * @private
+     */
+    async _detokenizeDOBPreserveYYYYGroup(tokens) {
+        const vault = this.vaultsByDataType['DOB_PRESERVE_YYYY'];
+        if (!vault) {
+            console.error('No vault configured for DOB_PRESERVE_YYYY');
+            return tokens.map(t => ({
+                rowIndex: t.rowIndex,
+                value: null,
+                error: 'No vault configured for DOB_PRESERVE_YYYY'
+            }));
+        }
+
+        const client = this._getOrInitializeClient('DOB_PRESERVE_YYYY');
+        const { vaultId, table, columns } = vault;
+        const results = [];
+
+        // Group tokens by unique value for deduplication
+        const tokenMap = new Map();
+        tokens.forEach(item => {
+            if (!tokenMap.has(item.token)) {
+                tokenMap.set(item.token, []);
+            }
+            tokenMap.get(item.token).push(item.rowIndex);
+        });
+
+        // Process each unique token
+        for (const [reconstructedToken, rowIndexes] of tokenMap.entries()) {
+            try {
+                // Parse token format: "2025-05-16" -> year="2025", monthDayToken="05-16"
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(reconstructedToken)) {
+                    for (const rowIndex of rowIndexes) {
+                        results.push({
+                            rowIndex,
+                            value: null,
+                            error: `Invalid token format: ${reconstructedToken}. Expected YYYY-MM-DD`
+                        });
+                    }
+                    continue;
+                }
+
+                const dobYear = reconstructedToken.substring(0, 4);       // "2025"
+                const monthDayToken = reconstructedToken.substring(5);    // "05-16"
+
+                console.log(`DOB_PRESERVE_YYYY Query: month_day_token=${monthDayToken}, dob_year=${dobYear}`);
+
+                // Use SDK's query method
+                const sqlQuery = `SELECT ${columns.dob_full} FROM ${table} WHERE ${columns.month_day_token} = '${monthDayToken}' AND ${columns.dob_year} = '${dobYear}'`;
+                console.log(`DOB_PRESERVE_YYYY SQL: ${sqlQuery}`);
+
+                const queryRequest = new QueryRequest(sqlQuery);
+                const response = await client.vault(vaultId).query(queryRequest);
+
+                // Parse response
+                const fields = response.fields || [];
+                if (fields.length === 0) {
+                    for (const rowIndex of rowIndexes) {
+                        results.push({
+                            rowIndex,
+                            value: null,
+                            error: `No record found for month_day_token=${monthDayToken}, dob_year=${dobYear}`
+                        });
+                    }
+                    continue;
+                }
+
+                const dobFull = fields[0][columns.dob_full];
+                console.log(`DOB_PRESERVE_YYYY Retrieved original value: ${dobFull}`);
+
+                // Return the original value to all rowIndexes with this token
+                for (const rowIndex of rowIndexes) {
+                    results.push({
+                        rowIndex,
+                        value: dobFull, // e.g., "2025-10-01"
+                        error: null
+                    });
+                }
+
+            } catch (error) {
+                console.error(`DOB_PRESERVE_YYYY detokenization failed for ${reconstructedToken}:`, error.message);
+                for (const rowIndex of rowIndexes) {
+                    results.push({
+                        rowIndex,
+                        value: null,
+                        error: error.message
+                    });
+                }
+            }
+        }
+
+        // Sort by rowIndex to preserve original order
+        results.sort((a, b) => a.rowIndex - b.rowIndex);
+        console.log(`DOB_PRESERVE_YYYY detokenization complete: ${results.length} results`);
+        return results;
+    }
+
+    /**
      * Detokenize a group of tokens for a specific data type
      * @private
      */
     async _detokenizeDataTypeGroup(dataType, tokens) {
+        // Special handling for DOB_PRESERVE_YYYY (query-based detokenization)
+        if (dataType === 'DOB_PRESERVE_YYYY') {
+            return await this._detokenizeDOBPreserveYYYYGroup(tokens);
+        }
+
         const vault = this.vaultsByDataType[dataType];
         if (!vault) {
             console.error(`No vault configured for data type: ${dataType}`);
