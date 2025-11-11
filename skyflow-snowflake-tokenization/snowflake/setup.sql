@@ -18,15 +18,15 @@ USE ROLE ACCOUNTADMIN;
 -- ============================================================================
 -- STEP 1: Create API Integration
 -- ============================================================================
--- Replace the following values:
+-- Replace the following values (deploy.sh does this automatically):
 --   - API_AWS_ROLE_ARN: IAM role ARN that Snowflake will assume
 --   - API_ALLOWED_PREFIXES: Your API Gateway URL prefix
 
 CREATE OR REPLACE API INTEGRATION skyflow_api_integration
     API_PROVIDER = aws_api_gateway
-    API_AWS_ROLE_ARN = 'arn:aws:iam::571930033416:role/SnowflakeAPIRole'
+    API_AWS_ROLE_ARN = 'arn:aws:iam::YOUR_AWS_ACCOUNT_ID:role/SnowflakeAPIRole'
     ENABLED = TRUE
-    API_ALLOWED_PREFIXES = ('https://g8cf1njxqi.execute-api.us-east-1.amazonaws.com/');
+    API_ALLOWED_PREFIXES = ('https://YOUR_API_GATEWAY_ID.execute-api.YOUR_REGION.amazonaws.com/');
 
 -- ============================================================================
 -- STEP 2: Get Trust Policy for AWS IAM Role
@@ -81,11 +81,27 @@ GRANT USAGE ON INTEGRATION skyflow_api_integration TO ROLE YOUR_APPLICATION_ROLE
 -- 1. Run create_function.sql to create the external functions (8 functions total)
 --    - 4 detokenization functions: DETOK_NAME, DETOK_ID, DETOK_DOB, DETOK_SSN
 --    - 4 tokenization functions: TOK_NAME, TOK_ID, TOK_DOB, TOK_SSN
+--    - All functions use a single /process endpoint
 -- 2. Test with examples.sql
+--
+-- Architecture:
+-- - Single API Gateway endpoint: /process (no query parameters)
+-- - Control metadata (operation, dataType) passed via HTTP HEADERS
+-- - Caller identity (user, role, account) passed via CONTEXT_HEADERS
+-- - Provides audit trail and enables role-based authorization
+--
+-- Headers sent to Lambda (Snowflake prepends 'sf-custom-' and 'sf-context-' prefixes):
+-- - sf-custom-x-operation: tokenize | detokenize (static per function)
+-- - sf-custom-x-data-type: NAME | ID | DOB | SSN (static per function)
+-- - sf-context-current-user: <calling user> (dynamic per call)
+-- - sf-context-current-role: <calling role> (dynamic per call)
+-- - sf-context-current-account: <account id> (dynamic per call)
+-- - sf-context-current-ip-address: <caller IP address> (dynamic per call)
 --
 -- Troubleshooting:
 -- - If you get "API Integration not found", check ACCOUNTADMIN role
 -- - If function calls fail, verify the trust policy in AWS IAM
--- - Check CloudWatch logs in AWS for Lambda errors
--- - Verify API Gateway has both /tokenize and /detokenize routes
+-- - Check CloudWatch logs in AWS for Lambda errors (includes caller context)
+-- - Verify API Gateway has /process route configured
+-- - Ensure your Snowflake version supports CONTEXT_HEADERS
 -- ============================================================================

@@ -8,7 +8,7 @@ This project provides both **tokenization** and **detokenization** capabilities 
 
 ```sql
 -- Tokenize sensitive data
-SELECT TOK_NAME('John Doe'), TOK_SSN('123-45-6789');
+SELECT TOK_NAME('John Doe'), TOK_SSN('123-45-6789'), TOK_DOB_PRESERVE_YYYY('1984-04-25');
 
 -- Detokenize for authorized access
 SELECT DETOK_NAME(name_token), DETOK_SSN(ssn_token) FROM patients;
@@ -24,22 +24,25 @@ SELECT DETOK_NAME(TOK_NAME('Jane Smith')) as should_be_jane_smith;
 │ Snowflake Query                                             │
 │ SELECT TOK_NAME(name), DETOK_SSN(ssn_token) FROM MY_TABLE  │
 └────────────────────┬────────────────────────────────────────┘
-                     │ HTTPS (IAM Auth)
+                     │ HTTPS (IAM Auth) + Headers
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ AWS API Gateway                                             │
-│ - Routes: /tokenize/{datatype}, /detokenize/{datatype}    │
+│ - Single endpoint: /process                                 │
+│ - Headers: X-Operation, X-Data-Type                         │
+│ - Context: Current User/Role/Account                        │
 │ - IAM Role Authentication                                   │
 │ - Rate Limiting (10K requests/second)                       │
 └────────────────────┬────────────────────────────────────────┘
                      │ Invoke
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ AWS Lambda Function (Node.js 20.x or Go 1.x)               │
+│ AWS Lambda Function (Node.js 20.x)                         │
 │ - Official Skyflow Node.js SDK v2.0.0                      │
 │ - Batch processing (SDK-managed)                           │
 │ - Upsert mode for tokenization (idempotent)                │
 │ - Data-type specific vault routing                         │
+│ - Caller context logging (audit trail)                     │
 └────────────────────┬────────────────────────────────────────┘
                      │ HTTPS
                      ▼
@@ -50,15 +53,10 @@ SELECT DETOK_NAME(TOK_NAME('Jane Smith')) as should_be_jane_smith;
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Implementation Options
+## Implementation Features
 
-Choose the implementation that best fits your requirements:
+**Built with Official Skyflow Node.js SDK v2.0.0**
 
-### Node.js Implementation (Recommended)
-
-**Best for:** Rapid deployment, AWS Secrets Manager integration, easy maintenance
-
-**Features:**
 - ✅ Official Skyflow Node.js SDK v2.0.0
 - ✅ Simplified codebase with official support
 - ✅ AWS Secrets Manager integration (secure credential storage)
@@ -71,30 +69,9 @@ Choose the implementation that best fits your requirements:
 1. **Automated (Recommended)**: Use `deploy.sh` script for end-to-end deployment
 2. **Manual**: Follow `lambda/Skyflow-for-Snowflake-Deployment-Guide.md` for AWS CLI commands
 
-**Performance:** ~3-5 seconds for 1,000 tokens
-
-**Files:** `lambda/` directory (Node.js implementation)
-
-### Go Implementation
-
-**Best for:** Maximum performance, minimal cold start time, production scale
-
-**Features:**
-- ✅ Custom HTTP client implementation
-- ✅ Minimal cold start (~50ms vs ~150ms for Node.js)
-- ✅ Lower memory footprint
-- ✅ Compiled binary (no runtime dependencies)
-- ✅ Direct Skyflow API integration
-
-**Setup:** See `../skyflow-snowflake-tokenization-go-minimal/` directory
-
-**Performance:** ~2-3 seconds for 1,000 tokens
-
-**Files:** Separate Go repository with modular architecture
-
 ---
 
-## Quick Start (Node.js - Automated)
+## Quick Start (Automated)
 
 Get up and running in 10 minutes with the automated deployment script:
 
@@ -174,7 +151,7 @@ SELECT DETOK_NAME(TOK_NAME('John Doe'));
 
 ---
 
-## Quick Start (Node.js - Manual)
+## Quick Start (Manual)
 
 For customers who prefer AWS CLI commands over automation scripts:
 
@@ -224,13 +201,13 @@ Extract the zip and follow `Skyflow-for-Snowflake-Deployment-Guide.md` for:
 
 ### Throughput Estimates
 
-| Dataset Size | Node.js Time | Go Time | Cost (approx) |
-|-------------|-------------|---------|---------------|
-| 100 tokens | ~1-2 seconds | ~0.5-1 second | $0.0001 |
-| 1,000 tokens | ~3-5 seconds | ~2-3 seconds | $0.001 |
-| 10,000 tokens | ~20-30 seconds | ~15-20 seconds | $0.01 |
-| 100,000 tokens | ~3-5 minutes | ~2-3 minutes | $0.10 |
-| 1,000,000 tokens | ~30-50 minutes | ~20-30 minutes | $1.00 |
+| Dataset Size | Processing Time | Cost (approx) |
+|-------------|----------------|---------------|
+| 100 tokens | ~1-2 seconds | $0.0001 |
+| 1,000 tokens | ~3-5 seconds | $0.001 |
+| 10,000 tokens | ~20-30 seconds | $0.01 |
+| 100,000 tokens | ~3-5 minutes | $0.10 |
+| 1,000,000 tokens | ~30-50 minutes | $1.00 |
 
 ### SDK Integration Benefits
 - **Official Support**: Maintained by Skyflow engineering
@@ -243,13 +220,13 @@ Extract the zip and follow `Skyflow-for-Snowflake-Deployment-Guide.md` for:
 ## Project Structure
 
 ```
-skyflow-snowflake-tokenization/          # Node.js implementation (this directory)
+skyflow-snowflake-tokenization/
 ├── README.md                            # This file
 ├── QUICKSTART.md                        # 5-minute setup guide (automated)
 ├── deploy.sh                            # Deployment automation script
 ├── config.example.json                  # Configuration template
 │
-├── lambda/                              # Node.js Lambda implementation
+├── lambda/                              # Lambda implementation
 │   ├── config.js                        # AWS Secrets Manager integration
 │   ├── skyflow-client.js                # Skyflow SDK client wrapper
 │   ├── handler.js                       # Lambda entry point
@@ -259,16 +236,10 @@ skyflow-snowflake-tokenization/          # Node.js implementation (this director
 │
 ├── snowflake/                           # Snowflake SQL scripts
 │   ├── setup.sql                        # API integration setup
-│   ├── create_function.sql              # External function definitions (8 functions)
+│   ├── create_function.sql              # External function definitions (10 functions)
 │   └── examples.sql                     # Usage examples
 │
 └── skyflow-snowflake-tokenization-customer.zip  # Customer distribution package
-
-../skyflow-snowflake-tokenization-go-minimal/   # Go implementation (separate)
-├── README.md                            # Go-specific documentation
-├── cmd/lambda/main.go                   # Go Lambda entry point
-├── internal/                            # Go modules (handler, skyflow, config)
-└── build/                               # Compiled binaries
 ```
 
 ---
@@ -283,6 +254,7 @@ SELECT TOK_NAME('John Doe') as name_token;
 SELECT TOK_SSN('123-45-6789') as ssn_token;
 SELECT TOK_DOB('1990-01-01') as dob_token;
 SELECT TOK_ID('12345') as id_token;
+SELECT TOK_DOB_PRESERVE_YYYY('1984-04-25') as dob_year_preserved_token;
 ```
 
 ### Basic Detokenization
@@ -303,6 +275,7 @@ SELECT
     TOK_NAME(patient_name) as name_token,
     TOK_SSN(ssn) as ssn_token,
     TOK_DOB(date_of_birth) as dob_token,
+    TOK_DOB_PRESERVE_YYYY(date_of_birth) as dob_year_preserved_token,
     admission_date,
     department
 FROM patients_raw;
@@ -316,7 +289,8 @@ SELECT
     patient_id,
     DETOK_NAME(name_token) as patient_name,
     DETOK_SSN(ssn_token) as ssn,
-    DETOK_DOB(dob_token) as date_of_birth
+    DETOK_DOB(dob_token) as date_of_birth,
+    DETOK_DOB_PRESERVE_YYYY(dob_year_preserved_token) as dob_year_preserved
 FROM patients_tokenized
 WHERE admission_date > '2024-01-01'
 LIMIT 100;
@@ -344,7 +318,8 @@ SELECT
     customer_id,
     TOK_NAME(name) as name_token,
     TOK_SSN(ssn) as ssn_token,
-    TOK_DOB(dob) as dob_token
+    TOK_DOB(dob) as dob_token,
+    TOK_DOB_PRESERVE_YYYY(dob) as dob_year_preserved_token
 FROM customers
 LIMIT 10000;  -- Processes ~100-200 at a time internally
 ```
@@ -482,12 +457,15 @@ aws lambda get-function-configuration \
 ### Debug Commands
 
 ```bash
-# Test Lambda directly
+# Test Lambda directly with headers
+# Note: Snowflake prepends 'sf-custom-' to custom headers and 'sf-context-' to context headers
 aws lambda invoke \
     --function-name skyflow-tokenization \
-    --payload '{"path":"/tokenize/name","body":"{\"data\":[[0,\"John Doe\"]]}"}' \
+    --payload '{"headers":{"sf-custom-x-operation":"tokenize","sf-custom-x-data-type":"NAME","sf-context-current-user":"TESTUSER","sf-context-current-role":"TESTROLE","sf-context-current-account":"TESTACCT"},"body":"{\"data\":[[0,\"John Doe\"]]}"}' \
     --region us-east-1 \
     response.json
+
+cat response.json
 
 # Check Lambda policy
 aws lambda get-policy \
@@ -572,7 +550,6 @@ See `lambda/Skyflow-for-Snowflake-Deployment-Guide.md` for complete AWS CLI comm
 - **Quick Start**: See [QUICKSTART.md](QUICKSTART.md) for 5-minute automated setup
 - **Manual Setup**: See [lambda/Skyflow-for-Snowflake-Deployment-Guide.md](lambda/Skyflow-for-Snowflake-Deployment-Guide.md)
 - **SQL Examples**: See [snowflake/examples.sql](snowflake/examples.sql) for 20+ usage examples
-- **Go Implementation**: See `../skyflow-snowflake-tokenization-go-minimal/README.md`
 
 ### Getting Help
 - **Skyflow Support**: https://support.skyflow.com
@@ -580,9 +557,6 @@ See `lambda/Skyflow-for-Snowflake-Deployment-Guide.md` for complete AWS CLI comm
 - **Snowflake Support**: https://support.snowflake.com
 
 ### Common Questions
-
-**Q: Should I use Node.js or Go?**
-A: Node.js for rapid deployment and ease of maintenance. Go for maximum performance and minimal cold starts.
 
 **Q: Can I use environment variables instead of Secrets Manager?**
 A: Yes, but Secrets Manager is recommended for secure credential storage and rotation support.
@@ -600,4 +574,4 @@ A: Automated uses `deploy.sh` for one-command deployment. Manual uses AWS CLI co
 
 **Built with ❤️ for Skyflow customers**
 
-Ready to protect your sensitive data in Snowflake? Get started with the [Quick Start](#quick-start-nodejs---automated) guide above.
+Ready to protect your sensitive data in Snowflake? Get started with the [Quick Start](#quick-start-automated) guide above.

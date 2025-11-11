@@ -59,8 +59,9 @@ Before starting, gather these values:
 - **Authentication credentials** (choose one):
   - **JWT (Service Account)**: Client ID, private key, token URI, key ID (recommended)
   - **API Key**: Bearer token
-- Vault IDs for each data type (NAME, ID, DOB, SSN)
+- Vault IDs for each data type (NAME, ID, DOB, SSN, DOB_PRESERVE_YYYY)
 - Table and column names for each data type
+- For DOB_PRESERVE_YYYY: Additional column names (dob_full, dob_year, month_day_token)
 
 **From AWS:**
 - AWS Account ID
@@ -179,6 +180,16 @@ Create `skyflow-config.json` with your Skyflow credentials. You can use either *
           "minLength": 3,
           "stripPunctuation": true
         }
+      },
+      {
+        "vaultId": "YOUR_VAULT_ID_FOR_DOB_PRESERVE_YYYY",
+        "table": "persons",
+        "dataType": "DOB_PRESERVE_YYYY",
+        "columns": {
+          "dob_full": "date_of_birth",
+          "dob_year": "dob_year",
+          "month_day_token": "month_day_token"
+        }
       }
     ]
   },
@@ -245,6 +256,16 @@ Create `skyflow-config.json` with your Skyflow credentials. You can use either *
           "uppercase": false,
           "minLength": 3,
           "stripPunctuation": true
+        }
+      },
+      {
+        "vaultId": "YOUR_VAULT_ID_FOR_DOB_PRESERVE_YYYY",
+        "table": "persons",
+        "dataType": "DOB_PRESERVE_YYYY",
+        "columns": {
+          "dob_full": "date_of_birth",
+          "dob_year": "dob_year",
+          "month_day_token": "month_day_token"
         }
       }
     ]
@@ -316,18 +337,23 @@ Store configuration directly as Lambda environment variables (no Secrets Manager
 ### Step 3: Create AWS Secrets Manager Secret
 
 ```bash
+# Set your secret name (customize this if needed)
+export SECRET_NAME="skyflow-tokenization-config"
+
 # Create the secret in your chosen region
 aws secretsmanager create-secret \
-    --name skyflow-tokenization-config \
+    --name ${SECRET_NAME} \
     --description "Skyflow tokenization configuration" \
     --secret-string file://skyflow-config.json \
     --region ${AWS_REGION}
 
 # Verify secret was created
 aws secretsmanager describe-secret \
-    --secret-id skyflow-tokenization-config \
+    --secret-id ${SECRET_NAME} \
     --region ${AWS_REGION}
 ```
+
+**Note:** The secret name is configurable. The Lambda reads it from the `SECRETS_MANAGER_SECRET_NAME` environment variable (Step 6).
 
 **Expected output:**
 ```json
@@ -399,7 +425,7 @@ Create `secrets-manager-policy.json`:
 }
 ```
 
-**Note:** Using `*` for region allows the Lambda to work if you move it to another region later. You can restrict to your specific region for tighter security: `arn:aws:secretsmanager:${AWS_REGION}:...`
+**Note:** The `-*` suffix in the Resource ARN matches AWS's automatic random string. If you used a custom secret name, update the policy to match (e.g., `secret:my-custom-name-*`). Using `*` for region allows the Lambda to work if you move it to another region later.
 
 ```bash
 # Attach Secrets Manager policy
@@ -440,7 +466,7 @@ ls -lh function.zip
 ### Step 6: Create Lambda Function
 
 ```bash
-# Create Lambda function
+# Create Lambda function (uses SECRET_NAME from Step 3)
 aws lambda create-function \
     --function-name skyflow-tokenization \
     --runtime nodejs20.x \
@@ -450,7 +476,7 @@ aws lambda create-function \
     --timeout 60 \
     --memory-size 256 \
     --description "Skyflow tokenization and detokenization for Snowflake" \
-    --environment Variables="{SECRETS_MANAGER_SECRET_NAME=skyflow-tokenization-config}" \
+    --environment Variables="{SECRETS_MANAGER_SECRET_NAME=${SECRET_NAME}}" \
     --region ${AWS_REGION}
 
 # Verify Lambda was created
@@ -459,6 +485,8 @@ aws lambda get-function \
     --region ${AWS_REGION} \
     --query 'Configuration.[FunctionName,Runtime,Handler,State]'
 ```
+
+**Note:** The `SECRETS_MANAGER_SECRET_NAME` must match the secret name from Step 3.
 
 **Expected output:**
 ```json
@@ -473,6 +501,8 @@ aws lambda get-function \
 ---
 
 ### Step 7: Create API Gateway
+
+This implementation uses a **single API Gateway endpoint** (`/process`) that receives operation and data type via HTTP headers, with caller context automatically provided by Snowflake's CONTEXT_HEADERS.
 
 **7.1 Create REST API**
 
@@ -498,107 +528,42 @@ ROOT_RESOURCE_ID=$(aws apigateway get-resources \
 echo "Root Resource ID: ${ROOT_RESOURCE_ID}"
 ```
 
-**7.2 Create /tokenize resource**
+**7.2 Create single /process resource**
 
 ```bash
-# Create /tokenize resource
-TOKENIZE_RESOURCE_ID=$(aws apigateway create-resource \
+# Create /process resource (single endpoint for all operations)
+PROCESS_RESOURCE_ID=$(aws apigateway create-resource \
     --rest-api-id ${API_ID} \
     --parent-id ${ROOT_RESOURCE_ID} \
-    --path-part tokenize \
+    --path-part process \
     --region ${AWS_REGION} \
     --query 'id' \
     --output text)
 
-echo "Tokenize Resource ID: ${TOKENIZE_RESOURCE_ID}"
-```
+echo "Process Resource ID: ${PROCESS_RESOURCE_ID}"
 
-**7.3 Create /tokenize/{datatype} resources**
-
-```bash
-# Create sub-resources for each data type
-for DATA_TYPE in name id dob ssn; do
-    echo "Creating /tokenize/${DATA_TYPE}"
-
-    RESOURCE_ID=$(aws apigateway create-resource \
-        --rest-api-id ${API_ID} \
-        --parent-id ${TOKENIZE_RESOURCE_ID} \
-        --path-part ${DATA_TYPE} \
-        --region ${AWS_REGION} \
-        --query 'id' \
-        --output text)
-
-    # Create POST method
-    aws apigateway put-method \
-        --rest-api-id ${API_ID} \
-        --resource-id ${RESOURCE_ID} \
-        --http-method POST \
-        --authorization-type NONE \
-        --region ${AWS_REGION}
-
-    # Set up Lambda integration
-    aws apigateway put-integration \
-        --rest-api-id ${API_ID} \
-        --resource-id ${RESOURCE_ID} \
-        --http-method POST \
-        --type AWS_PROXY \
-        --integration-http-method POST \
-        --uri "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:function:skyflow-tokenization/invocations" \
-        --region ${AWS_REGION}
-done
-```
-
-**7.4 Create /detokenize resource**
-
-```bash
-# Create /detokenize resource
-DETOKENIZE_RESOURCE_ID=$(aws apigateway create-resource \
+# Create POST method
+aws apigateway put-method \
     --rest-api-id ${API_ID} \
-    --parent-id ${ROOT_RESOURCE_ID} \
-    --path-part detokenize \
-    --region ${AWS_REGION} \
-    --query 'id' \
-    --output text)
+    --resource-id ${PROCESS_RESOURCE_ID} \
+    --http-method POST \
+    --authorization-type NONE \
+    --region ${AWS_REGION}
 
-echo "Detokenize Resource ID: ${DETOKENIZE_RESOURCE_ID}"
+# Set up Lambda integration (AWS_PROXY automatically passes headers)
+aws apigateway put-integration \
+    --rest-api-id ${API_ID} \
+    --resource-id ${PROCESS_RESOURCE_ID} \
+    --http-method POST \
+    --type AWS_PROXY \
+    --integration-http-method POST \
+    --uri "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:function:skyflow-tokenization/invocations" \
+    --region ${AWS_REGION}
+
+echo "Configured single endpoint: /process"
 ```
 
-**7.5 Create /detokenize/{datatype} resources**
-
-```bash
-# Create sub-resources for each data type
-for DATA_TYPE in name id dob ssn; do
-    echo "Creating /detokenize/${DATA_TYPE}"
-
-    RESOURCE_ID=$(aws apigateway create-resource \
-        --rest-api-id ${API_ID} \
-        --parent-id ${DETOKENIZE_RESOURCE_ID} \
-        --path-part ${DATA_TYPE} \
-        --region ${AWS_REGION} \
-        --query 'id' \
-        --output text)
-
-    # Create POST method
-    aws apigateway put-method \
-        --rest-api-id ${API_ID} \
-        --resource-id ${RESOURCE_ID} \
-        --http-method POST \
-        --authorization-type NONE \
-        --region ${AWS_REGION}
-
-    # Set up Lambda integration
-    aws apigateway put-integration \
-        --rest-api-id ${API_ID} \
-        --resource-id ${RESOURCE_ID} \
-        --http-method POST \
-        --type AWS_PROXY \
-        --integration-http-method POST \
-        --uri "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:function:skyflow-tokenization/invocations" \
-        --region ${AWS_REGION}
-done
-```
-
-**7.6 Grant API Gateway permission to invoke Lambda**
+**7.3 Grant API Gateway permission to invoke Lambda**
 
 ```bash
 # Add Lambda permission for API Gateway
@@ -611,7 +576,7 @@ aws lambda add-permission \
     --region ${AWS_REGION}
 ```
 
-**7.7 Deploy API**
+**7.4 Deploy API**
 
 ```bash
 # Deploy API to prod stage
@@ -622,8 +587,11 @@ aws apigateway create-deployment \
     --region ${AWS_REGION}
 
 # Get API URL
-API_URL="https://${API_ID}.execute-api.${AWS_REGION}.amazonaws.com/prod"
+API_URL="https://${API_ID}.execute-api.${AWS_REGION}.amazonaws.com/prod/process"
 echo "API URL: ${API_URL}"
+echo ""
+echo "Note: Operation and data type are passed via HTTP headers (X-Operation, X-Data-Type)"
+echo "      Snowflake functions automatically include these headers in requests"
 ```
 
 ---
@@ -765,47 +733,79 @@ USE ROLE ACCOUNTADMIN;
 USE DATABASE YOUR_DATABASE;
 USE SCHEMA YOUR_SCHEMA;
 
--- Tokenization functions
+-- All functions use a single /process endpoint with HTTP headers
+
+-- Tokenization functions (with HEADERS and CONTEXT_HEADERS)
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_NAME(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/tokenize/name';
+    HEADERS = ('X-Operation' = 'tokenize', 'X-Data-Type' = 'NAME')
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_ID(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/tokenize/id';
+    HEADERS = ('X-Operation' = 'tokenize', 'X-Data-Type' = 'ID')
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_DOB(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/tokenize/dob';
+    HEADERS = ('X-Operation' = 'tokenize', 'X-Data-Type' = 'DOB')
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_SSN(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/tokenize/ssn';
+    HEADERS = ('X-Operation' = 'tokenize', 'X-Data-Type' = 'SSN')
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
--- Detokenization functions
+CREATE OR REPLACE EXTERNAL FUNCTION TOK_DOB_PRESERVE_YYYY(plaintext VARCHAR)
+    RETURNS VARCHAR
+    API_INTEGRATION = skyflow_api_integration
+    HEADERS = ('X-Operation' = 'tokenize', 'X-Data-Type' = 'DOB_PRESERVE_YYYY')
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
+
+-- Detokenization functions (with HEADERS and CONTEXT_HEADERS)
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_NAME(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/detokenize/name';
+    HEADERS = ('X-Operation' = 'detokenize', 'X-Data-Type' = 'NAME')
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_ID(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/detokenize/id';
+    HEADERS = ('X-Operation' = 'detokenize', 'X-Data-Type' = 'ID')
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_DOB(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/detokenize/dob';
+    HEADERS = ('X-Operation' = 'detokenize', 'X-Data-Type' = 'DOB')
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_SSN(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/detokenize/ssn';
+    HEADERS = ('X-Operation' = 'detokenize', 'X-Data-Type' = 'SSN')
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
+
+CREATE OR REPLACE EXTERNAL FUNCTION DETOK_DOB_PRESERVE_YYYY(token VARCHAR)
+    RETURNS VARCHAR
+    API_INTEGRATION = skyflow_api_integration
+    HEADERS = ('X-Operation' = 'detokenize', 'X-Data-Type' = 'DOB_PRESERVE_YYYY')
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 -- Verify functions were created
 SHOW FUNCTIONS LIKE 'TOK_%';
@@ -819,15 +819,26 @@ SHOW FUNCTIONS LIKE 'DETOK_%';
 ### Test Lambda Directly
 
 ```bash
-# Test tokenization
+# Test tokenization with headers
+# Note: Snowflake prepends 'sf-custom-' to custom headers and 'sf-context-' to context headers
 aws lambda invoke \
     --function-name skyflow-tokenization \
-    --payload '{"path":"/tokenize/name","body":"{\"data\":[[0,\"John Doe\"]]}"}' \
+    --payload '{"headers":{"sf-custom-x-operation":"tokenize","sf-custom-x-data-type":"NAME","sf-context-current-user":"TESTUSER","sf-context-current-role":"TESTROLE","sf-context-current-account":"TESTACCT"},"body":"{\"data\":[[0,\"John Doe\"]]}"}' \
     --region ${AWS_REGION} \
     response.json
 
 cat response.json
 # Expected: {"statusCode":200,"body":"{\"data\":[[0,\"tok_...\"]]}"}
+
+# Test detokenization with headers (replace tok_abc123 with actual token from above)
+aws lambda invoke \
+    --function-name skyflow-tokenization \
+    --payload '{"headers":{"sf-custom-x-operation":"detokenize","sf-custom-x-data-type":"NAME","sf-context-current-user":"TESTUSER","sf-context-current-role":"TESTROLE","sf-context-current-account":"TESTACCT"},"body":"{\"data\":[[0,\"tok_abc123\"]]}"}' \
+    --region ${AWS_REGION} \
+    response.json
+
+cat response.json
+# Expected: {"statusCode":200,"body":"{\"data\":[[0,\"John Doe\"]]}"}
 ```
 
 ### Test in Snowflake
@@ -846,7 +857,8 @@ SELECT
     TOK_NAME('Jane Smith') as name_token,
     TOK_ID('12345') as id_token,
     TOK_DOB('1990-01-01') as dob_token,
-    TOK_SSN('123-45-6789') as ssn_token;
+    TOK_SSN('123-45-6789') as ssn_token,
+    TOK_DOB_PRESERVE_YYYY('1984-04-25') as dob_preserve_yyyy_token;
 
 -- Test batch processing
 SELECT
@@ -867,7 +879,7 @@ aws logs tail /aws/lambda/skyflow-tokenization \
 
 # Look for:
 # - "Loading configuration..."
-# - "Loading from AWS Secrets Manager: skyflow-tokenization-config"
+# - "Loading from AWS Secrets Manager: ..."
 # - "Initialized singleton Secrets Manager client" (first invocation only)
 # - "Configuration loaded from Secrets Manager"
 # - "Credentials type: Service Account (JWT)" or "Credentials type: API Key"
@@ -907,12 +919,13 @@ This implementation includes several optimizations for improved performance and 
 This implementation uses the **official Skyflow Node.js SDK v2.0.0**, which provides enterprise-grade features managed for you:
 
 - **HTTP/2 connection management**: SDK handles connection multiplexing and header compression automatically
-- **Built-in error handling and retry logic**:  
+- **Built-in error handling and retry logic**:
   - Retries transient errors (network, HTTP 5xx, HTTP 429) with exponential backoff.
   - Does **not** retry permanent errors (HTTP 404, 400, 401, 403, etc.).
   - All retry logic is managed by the SDK; you do not need to implement custom retries for standard use cases.
 - **Optimized request batching**: Efficient payload formatting and parsing
 - **Multi-vault support**: Seamlessly routes requests to correct vaults based on data type
+- **Lazy vault initialization**: SDK clients are created on-demand per data type, reducing cold start time and memory usage
 - **Both authentication methods**: Supports JWT (Service Account) and API Key out of the box
 
 These SDK features work transparently—you get the performance benefits without additional configuration.
@@ -921,8 +934,6 @@ These SDK features work transparently—you get the performance benefits without
 - Separate batch sizes for tokenization and detokenization
 - Independent concurrency control for each operation
 - Optimized for different workload patterns
-- **Configurable batching**: Small batches (5) for low-latency tokenization, large batches (300) for high-throughput detokenization
-- **Concurrency control**: Process multiple batches in parallel with configurable limits
 
 ---
 
@@ -930,7 +941,7 @@ These SDK features work transparently—you get the performance benefits without
 
 ### Data Transformations
 
-The Lambda function supports Protegrity-compatible data transformations that are applied before tokenization. Each vault definition can specify transformation rules:
+The Lambda function supports data transformations that are applied before tokenization. Each vault definition can specify transformation rules:
 
 ```json
 {
@@ -953,6 +964,7 @@ The Lambda function supports Protegrity-compatible data transformations that are
 | **NAME**  | ✅ Yes     | ✅ Yes             | 3 chars    | None       |
 | **ID**    | ✅ Yes     | ✅ Yes             | 3 chars    | None       |
 | **DOB**   | ❌ No      | ✅ Yes             | None       | Date range: 0600-01-01 to 3337-11-27 |
+| **DOB_PRESERVE_YYYY** | ❌ No | ❌ No | None | Date format: YYYY-MM-DD (bypasses preprocessing, preserves year) |
 | **SSN**   | ❌ No      | ✅ Yes             | 3 chars    | None       |
 
 **How Transformations Work:**
@@ -982,6 +994,8 @@ The Lambda function supports Protegrity-compatible data transformations that are
 3. Check minimum length (if specified) - if too short, return original and skip tokenization
 4. Apply uppercase (if enabled)
 5. Tokenize processed value
+
+**Note:** DOB_PRESERVE_YYYY bypasses all preprocessing steps above. It only validates the date format (YYYY-MM-DD) and does not apply any transformations.
 
 ### Performance Settings
 
@@ -1021,7 +1035,7 @@ To update configuration:
 ```bash
 # Update your local skyflow-config.json file, then:
 aws secretsmanager update-secret \
-    --secret-id skyflow-tokenization-config \
+    --secret-id ${SECRET_NAME} \
     --secret-string file://skyflow-config.json \
     --region ${AWS_REGION}
 
@@ -1046,14 +1060,14 @@ aws lambda get-function-configuration \
 
 # Should show:
 # {
-#     "SECRETS_MANAGER_SECRET_NAME": "skyflow-tokenization-config"
+#     "SECRETS_MANAGER_SECRET_NAME": "your-secret-name"
 # }
 
-# If missing, set it:
+# If missing or incorrect, set it:
 aws lambda update-function-configuration \
     --function-name skyflow-tokenization \
     --region ${AWS_REGION} \
-    --environment Variables="{SECRETS_MANAGER_SECRET_NAME=skyflow-tokenization-config}"
+    --environment Variables="{SECRETS_MANAGER_SECRET_NAME=${SECRET_NAME}}"
 ```
 
 ### Permission Denied
@@ -1063,9 +1077,12 @@ aws lambda update-function-configuration \
 **Solution:** Check Lambda role has Secrets Manager permissions:
 
 ```bash
+# Check the IAM policy
 aws iam get-role-policy \
     --role-name skyflow-tokenization-lambda-role \
     --policy-name SecretsManagerReadPolicy
+
+# Verify the Resource ARN matches your secret name pattern
 ```
 
 ### HTTP 401 Unauthorized
@@ -1077,7 +1094,7 @@ aws iam get-role-policy \
 ```bash
 # View secret structure (be careful - shows sensitive data)
 aws secretsmanager get-secret-value \
-    --secret-id skyflow-tokenization-config \
+    --secret-id ${SECRET_NAME} \
     --region ${AWS_REGION} \
     --query 'SecretString' \
     --output text | jq '.credentials'
@@ -1157,7 +1174,7 @@ Then update the secret:
 
 ```bash
 aws secretsmanager update-secret \
-    --secret-id skyflow-tokenization-config \
+    --secret-id ${SECRET_NAME} \
     --secret-string file://skyflow-config.json \
     --region ${AWS_REGION}
 ```
@@ -1220,7 +1237,7 @@ aws iam delete-role \
 
 # Delete secret
 aws secretsmanager delete-secret \
-    --secret-id skyflow-tokenization-config \
+    --secret-id ${SECRET_NAME} \
     --force-delete-without-recovery \
     --region ${AWS_REGION}
 
@@ -1229,10 +1246,12 @@ DROP FUNCTION IF EXISTS TOK_NAME(VARCHAR);
 DROP FUNCTION IF EXISTS TOK_ID(VARCHAR);
 DROP FUNCTION IF EXISTS TOK_DOB(VARCHAR);
 DROP FUNCTION IF EXISTS TOK_SSN(VARCHAR);
+DROP FUNCTION IF EXISTS TOK_DOB_PRESERVE_YYYY(VARCHAR);
 DROP FUNCTION IF EXISTS DETOK_NAME(VARCHAR);
 DROP FUNCTION IF EXISTS DETOK_ID(VARCHAR);
 DROP FUNCTION IF EXISTS DETOK_DOB(VARCHAR);
 DROP FUNCTION IF EXISTS DETOK_SSN(VARCHAR);
+DROP FUNCTION IF EXISTS DETOK_DOB_PRESERVE_YYYY(VARCHAR);
 DROP API INTEGRATION IF EXISTS skyflow_api_integration;
 ```
 
@@ -1311,7 +1330,7 @@ Create a file `env-vars.json` with your settings:
   "SKYFLOW_PRIVATE_KEY": "-----BEGIN PRIVATE KEY-----\\nYOUR_KEY_HERE\\n-----END PRIVATE KEY-----\\n",
   "SKYFLOW_KEY_ALGORITHM": "KEY_ALG_RSA_2048",
   "SKYFLOW_VAULT_URL": "https://YOUR_CLUSTER_ID.vault.skyflowapis.com",
-  "SKYFLOW_VAULT_DEFINITIONS": "[{\"vaultId\":\"vault1\",\"table\":\"persons\",\"column\":\"name\",\"dataType\":\"NAME\",\"transformations\":{\"uppercase\":true,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault2\",\"table\":\"persons\",\"column\":\"person_id\",\"dataType\":\"ID\",\"transformations\":{\"uppercase\":true,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault3\",\"table\":\"persons\",\"column\":\"date_of_birth\",\"dataType\":\"DOB\",\"transformations\":{\"uppercase\":false,\"stripPunctuation\":true,\"validation\":{\"minDate\":\"0600-01-01\",\"maxDate\":\"3337-11-27\"}}},{\"vaultId\":\"vault4\",\"table\":\"persons\",\"column\":\"ssn\",\"dataType\":\"SSN\",\"transformations\":{\"uppercase\":false,\"minLength\":3,\"stripPunctuation\":true}}]",
+  "SKYFLOW_VAULT_DEFINITIONS": "[{\"vaultId\":\"vault1\",\"table\":\"persons\",\"column\":\"name\",\"dataType\":\"NAME\",\"transformations\":{\"uppercase\":true,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault2\",\"table\":\"persons\",\"column\":\"person_id\",\"dataType\":\"ID\",\"transformations\":{\"uppercase\":true,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault3\",\"table\":\"persons\",\"column\":\"date_of_birth\",\"dataType\":\"DOB\",\"transformations\":{\"uppercase\":false,\"stripPunctuation\":true,\"validation\":{\"minDate\":\"0600-01-01\",\"maxDate\":\"3337-11-27\"}}},{\"vaultId\":\"vault4\",\"table\":\"persons\",\"column\":\"ssn\",\"dataType\":\"SSN\",\"transformations\":{\"uppercase\":false,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault5\",\"table\":\"persons\",\"dataType\":\"DOB_PRESERVE_YYYY\",\"columns\":{\"dob_full\":\"date_of_birth\",\"dob_year\":\"dob_year\",\"month_day_token\":\"month_day_token\"}}]",
   "SKYFLOW_TOKENIZE_BATCH_SIZE": "5",
   "SKYFLOW_TOKENIZE_MAX_CONCURRENCY": "400",
   "SKYFLOW_DETOKENIZE_BATCH_SIZE": "100",

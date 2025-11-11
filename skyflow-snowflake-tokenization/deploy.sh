@@ -22,6 +22,81 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Check for help/info flags before loading config or checking AWS credentials
+case "${1}" in
+    --help|-h|help)
+        cat << 'EOF'
+Usage: ./deploy.sh {COMMAND} [OPTIONS]
+
+Main commands (default: file-based config with credentials.json):
+  --deploy                             Deploy Lambda and API Gateway (file-based config)
+  --deploy-secrets                     Deploy Lambda and API Gateway (Secrets Manager)
+  --deploy-e2e [options]               Deploy AWS + Snowflake (file-based config)
+  --deploy-e2e-secrets [options]       Deploy AWS + Snowflake (Secrets Manager)
+  --redeploy                           Destroy, redeploy, and test (file-based config)
+  --redeploy-secrets                   Destroy, redeploy, and test (Secrets Manager)
+  --redeploy-e2e [options]             Destroy, redeploy, setup Snowflake, test (file-based config)
+  --redeploy-e2e-secrets [options]     Destroy, redeploy, setup Snowflake, test (Secrets Manager)
+
+Other commands:
+  --destroy                            Destroy all AWS resources
+  --setup-permissions <user>           Grant AWS permissions to IAM user
+  --setup-snowflake [options]          Setup Snowflake integration
+  --test                               Test Snowflake integration
+
+Global options:
+  --region <region>                    AWS region to deploy to (default: from config.json or us-east-1)
+
+Options for *-e2e and setup-snowflake commands:
+  --database <name>                    Override database from config.json
+  --schema <name>                      Override schema from config.json
+
+Complete workflow (file-based config - RECOMMENDED):
+  1. ./deploy.sh --setup-permissions your-iam-username
+  2. ./deploy.sh --deploy-e2e                       # Deploy AWS + Snowflake in one command
+  3. ./deploy.sh --test
+
+Complete workflow (Secrets Manager - production):
+  1. ./deploy.sh --setup-permissions your-iam-username
+  2. ./deploy.sh --deploy-e2e-secrets               # Deploy AWS + Snowflake with Secrets Manager
+  3. ./deploy.sh --test
+
+Step-by-step (file-based config):
+  1. ./deploy.sh --setup-permissions your-iam-username
+  2. ./deploy.sh --deploy
+  3. ./deploy.sh --setup-snowflake
+  4. ./deploy.sh --test
+
+Step-by-step (Secrets Manager):
+  1. ./deploy.sh --setup-permissions your-iam-username
+  2. ./deploy.sh --deploy-secrets
+  3. ./deploy.sh --setup-snowflake
+  4. ./deploy.sh --test
+
+Examples:
+  # File-based config (default)
+  ./deploy.sh --deploy
+  ./deploy.sh --deploy-e2e
+  ./deploy.sh --deploy-e2e --database MY_DB --schema MY_SCHEMA
+  ./deploy.sh --redeploy
+  ./deploy.sh --redeploy-e2e
+
+  # Region override
+  ./deploy.sh --deploy --region us-west-2
+  ./deploy.sh --deploy-e2e --region eu-west-1
+  ./deploy.sh --deploy-secrets --region ap-southeast-1
+
+  # Secrets Manager (production)
+  ./deploy.sh --deploy-secrets
+  ./deploy.sh --deploy-e2e-secrets
+  ./deploy.sh --deploy-e2e-secrets --database MY_DB --schema MY_SCHEMA
+  ./deploy.sh --redeploy-secrets
+  ./deploy.sh --redeploy-e2e-secrets
+EOF
+        exit 0
+        ;;
+esac
+
 # Parse --region flag early (before loading config)
 REGION_OVERRIDE=""
 for arg in "$@"; do
@@ -41,46 +116,70 @@ IAM_ROLE_NAME="SnowflakeAPIRole"
 LAMBDA_ROLE_NAME="${PROJECT_NAME}-lambda-role"
 SECRET_NAME="${PROJECT_NAME}-config"
 
-# Load configuration
+# Load configuration (optional - AWS CLI credentials can come from environment)
 CONFIG_FILE="../config.json"
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo -e "${RED}Error: config.json not found at $CONFIG_FILE${NC}"
-    exit 1
+CONFIG_FILE_EXISTS=false
+if [ -f "$CONFIG_FILE" ]; then
+    CONFIG_FILE_EXISTS=true
+    echo -e "${BLUE}Found config.json, loading configuration...${NC}"
 fi
 
-# Extract AWS credentials from config
-AWS_ACCESS_KEY_ID=$(jq -r '.aws.AWS_S3_KEY_ID' "$CONFIG_FILE")
-AWS_SECRET_ACCESS_KEY=$(jq -r '.aws.AWS_S3_SECRET_ACCESS_KEY' "$CONFIG_FILE")
-
-# Set AWS region with priority: CLI flag > config file > default
-if [ -n "$REGION_OVERRIDE" ]; then
-    AWS_REGION="$REGION_OVERRIDE"
-    echo -e "${BLUE}Using region from --region flag: ${GREEN}${AWS_REGION}${NC}"
+# AWS Credentials - Priority: 1) Environment/AWS CLI, 2) config.json
+# Check if AWS CLI is already configured
+if aws sts get-caller-identity &>/dev/null; then
+    echo -e "${GREEN}✓ Using AWS credentials from AWS CLI / environment${NC}"
+    # Get region from --region flag, config.json, or default
+    if [ -n "$REGION_OVERRIDE" ]; then
+        AWS_REGION="$REGION_OVERRIDE"
+        echo -e "${BLUE}Using region from --region flag: ${GREEN}${AWS_REGION}${NC}"
+    elif [ "$CONFIG_FILE_EXISTS" = true ]; then
+        AWS_REGION=$(jq -r '.aws.AWS_DEFAULT_REGION // "us-east-1"' "$CONFIG_FILE" 2>/dev/null || echo "us-east-1")
+    else
+        AWS_REGION="us-east-1"
+    fi
 else
-    AWS_REGION=$(jq -r '.aws.AWS_DEFAULT_REGION // "us-east-1"' "$CONFIG_FILE")
+    # AWS CLI not configured, try loading from config.json
+    echo -e "${YELLOW}AWS CLI not configured, checking config.json...${NC}"
+
+    if [ "$CONFIG_FILE_EXISTS" = false ]; then
+        echo -e "${RED}Error: AWS credentials not found${NC}"
+        echo -e "${YELLOW}Please either:${NC}"
+        echo -e "  1. Configure AWS CLI: ${BLUE}aws configure${NC}"
+        echo -e "  2. Create config.json with AWS credentials at: ${BLUE}$CONFIG_FILE${NC}"
+        exit 1
+    fi
+
+    # Extract AWS credentials from config
+    AWS_ACCESS_KEY_ID=$(jq -r '.aws.AWS_S3_KEY_ID' "$CONFIG_FILE")
+    AWS_SECRET_ACCESS_KEY=$(jq -r '.aws.AWS_S3_SECRET_ACCESS_KEY' "$CONFIG_FILE")
+
+    # Validate configuration
+    if [ "$AWS_ACCESS_KEY_ID" == "null" ] || [ "$AWS_SECRET_ACCESS_KEY" == "null" ] || [ -z "$AWS_ACCESS_KEY_ID" ]; then
+        echo -e "${RED}Error: AWS credentials not found in config.json${NC}"
+        echo -e "${YELLOW}Please either:${NC}"
+        echo -e "  1. Configure AWS CLI: ${BLUE}aws configure${NC}"
+        echo -e "  2. Add AWS credentials to ${BLUE}$CONFIG_FILE${NC}"
+        exit 1
+    fi
+
+    # Set AWS region with priority: CLI flag > config file > default
+    if [ -n "$REGION_OVERRIDE" ]; then
+        AWS_REGION="$REGION_OVERRIDE"
+        echo -e "${BLUE}Using region from --region flag: ${GREEN}${AWS_REGION}${NC}"
+    else
+        AWS_REGION=$(jq -r '.aws.AWS_DEFAULT_REGION // "us-east-1"' "$CONFIG_FILE")
+    fi
+
+    # Set AWS credentials
+    export AWS_ACCESS_KEY_ID
+    export AWS_SECRET_ACCESS_KEY
+    echo -e "${GREEN}✓ Using AWS credentials from config.json${NC}"
 fi
 
-# Extract Skyflow configuration
-SKYFLOW_VAULT_URL=$(jq -r '.skyflow.vault_url' "$CONFIG_FILE")
-SKYFLOW_BEARER_TOKEN=$(jq -r '.skyflow.bearer_token' "$CONFIG_FILE")
-# Get first vault ID from array (if array) or object (if object)
-DEFAULT_VAULT_ID=$(jq -r 'if .skyflow.vaults | type == "array" then .skyflow.vaults[0].id else .skyflow.vaults.default // (.skyflow.vaults | to_entries | first | .value) end' "$CONFIG_FILE")
-
-# Validate configuration
-if [ "$AWS_ACCESS_KEY_ID" == "null" ] || [ "$AWS_SECRET_ACCESS_KEY" == "null" ]; then
-    echo -e "${RED}Error: AWS credentials not found in config.json${NC}"
-    exit 1
-fi
-
-if [ "$SKYFLOW_VAULT_URL" == "null" ] || [ "$SKYFLOW_BEARER_TOKEN" == "null" ]; then
-    echo -e "${RED}Error: Skyflow credentials not found in config.json${NC}"
-    exit 1
-fi
-
-# Set AWS credentials
-export AWS_ACCESS_KEY_ID
-export AWS_SECRET_ACCESS_KEY
 export AWS_DEFAULT_REGION=$AWS_REGION
+
+# Note: Skyflow configuration for Lambda comes from lambda/skyflow-config.json
+# The legacy Skyflow section in ../config.json is only used by the Go loader (main.go)
 
 # Get AWS account ID and user info
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -412,8 +511,8 @@ EOF
 
     # Create deployment package (NEVER include credentials.json)
     echo "  Creating package without credentials.json..."
-    zip -r function.zip config.js skyflow-client.js handler.js package.json node_modules/ 2>/dev/null || \
-    zip -r function.zip config.js skyflow-client.js handler.js package.json
+    zip -r function.zip config.js skyflow-client.js handler.js package.json node_modules/ >/dev/null 2>&1 || \
+    zip -r function.zip config.js skyflow-client.js handler.js package.json >/dev/null 2>&1
 
     echo -e "${GREEN}✓ Lambda package created: lambda/function.zip${NC}"
     echo ""
@@ -514,14 +613,14 @@ EOF
     # Get root resource ID
     ROOT_RESOURCE_ID=$(aws apigateway get-resources --rest-api-id "$API_ID" --query 'items[?path==`/`].id' --output text)
 
-    # Create /detokenize resource
-    RESOURCE_ID=$(aws apigateway get-resources --rest-api-id "$API_ID" --query "items[?pathPart=='detokenize'].id" --output text)
+    # Create single /process resource
+    PROCESS_RESOURCE_ID=$(aws apigateway get-resources --rest-api-id "$API_ID" --query "items[?pathPart=='process'].id" --output text)
 
-    if [ -z "$RESOURCE_ID" ]; then
-        RESOURCE_ID=$(aws apigateway create-resource \
+    if [ -z "$PROCESS_RESOURCE_ID" ]; then
+        PROCESS_RESOURCE_ID=$(aws apigateway create-resource \
             --rest-api-id "$API_ID" \
             --parent-id "$ROOT_RESOURCE_ID" \
-            --path-part "detokenize" \
+            --path-part "process" \
             --query 'id' \
             --output text)
     fi
@@ -529,114 +628,21 @@ EOF
     # Create POST method
     aws apigateway put-method \
         --rest-api-id "$API_ID" \
-        --resource-id "$RESOURCE_ID" \
+        --resource-id "$PROCESS_RESOURCE_ID" \
         --http-method POST \
         --authorization-type NONE \
         --no-api-key-required 2>/dev/null || true
 
-    # Set up Lambda integration
+    # Set up Lambda integration (AWS_PROXY passes headers automatically)
     aws apigateway put-integration \
         --rest-api-id "$API_ID" \
-        --resource-id "$RESOURCE_ID" \
+        --resource-id "$PROCESS_RESOURCE_ID" \
         --http-method POST \
         --type AWS_PROXY \
         --integration-http-method POST \
         --uri "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_ARN}/invocations" 2>/dev/null || true
 
-    # Create data-type specific paths: /detokenize/name, /detokenize/id, /detokenize/dob, /detokenize/ssn
-    for DATA_TYPE in name id dob ssn; do
-        # Check if resource exists
-        SUB_RESOURCE_ID=$(aws apigateway get-resources --rest-api-id "$API_ID" --query "items[?pathPart=='${DATA_TYPE}'].id" --output text)
-
-        if [ -z "$SUB_RESOURCE_ID" ]; then
-            SUB_RESOURCE_ID=$(aws apigateway create-resource \
-                --rest-api-id "$API_ID" \
-                --parent-id "$RESOURCE_ID" \
-                --path-part "${DATA_TYPE}" \
-                --query 'id' \
-                --output text)
-        fi
-
-        # Create POST method
-        aws apigateway put-method \
-            --rest-api-id "$API_ID" \
-            --resource-id "$SUB_RESOURCE_ID" \
-            --http-method POST \
-            --authorization-type NONE \
-            --no-api-key-required 2>/dev/null || true
-
-        # Set up Lambda integration
-        aws apigateway put-integration \
-            --rest-api-id "$API_ID" \
-            --resource-id "$SUB_RESOURCE_ID" \
-            --http-method POST \
-            --type AWS_PROXY \
-            --integration-http-method POST \
-            --uri "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_ARN}/invocations" 2>/dev/null || true
-    done
-
-    # Create /tokenize resource
-    TOKENIZE_RESOURCE_ID=$(aws apigateway get-resources --rest-api-id "$API_ID" --query "items[?pathPart=='tokenize'].id" --output text)
-
-    if [ -z "$TOKENIZE_RESOURCE_ID" ]; then
-        TOKENIZE_RESOURCE_ID=$(aws apigateway create-resource \
-            --rest-api-id "$API_ID" \
-            --parent-id "$ROOT_RESOURCE_ID" \
-            --path-part "tokenize" \
-            --query 'id' \
-            --output text)
-    fi
-
-    # Create POST method for /tokenize
-    aws apigateway put-method \
-        --rest-api-id "$API_ID" \
-        --resource-id "$TOKENIZE_RESOURCE_ID" \
-        --http-method POST \
-        --authorization-type NONE \
-        --no-api-key-required 2>/dev/null || true
-
-    # Set up Lambda integration for /tokenize
-    aws apigateway put-integration \
-        --rest-api-id "$API_ID" \
-        --resource-id "$TOKENIZE_RESOURCE_ID" \
-        --http-method POST \
-        --type AWS_PROXY \
-        --integration-http-method POST \
-        --uri "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_ARN}/invocations" 2>/dev/null || true
-
-    # Create data-type specific paths: /tokenize/name, /tokenize/id, /tokenize/dob, /tokenize/ssn
-    for DATA_TYPE in name id dob ssn; do
-        # Check if resource exists
-        TOKENIZE_SUB_RESOURCE_ID=$(aws apigateway get-resources --rest-api-id "$API_ID" --query "items[?pathPart=='${DATA_TYPE}' && parentId=='${TOKENIZE_RESOURCE_ID}'].id" --output text)
-
-        if [ -z "$TOKENIZE_SUB_RESOURCE_ID" ]; then
-            TOKENIZE_SUB_RESOURCE_ID=$(aws apigateway create-resource \
-                --rest-api-id "$API_ID" \
-                --parent-id "$TOKENIZE_RESOURCE_ID" \
-                --path-part "${DATA_TYPE}" \
-                --query 'id' \
-                --output text)
-        fi
-
-        # Create POST method
-        aws apigateway put-method \
-            --rest-api-id "$API_ID" \
-            --resource-id "$TOKENIZE_SUB_RESOURCE_ID" \
-            --http-method POST \
-            --authorization-type NONE \
-            --no-api-key-required 2>/dev/null || true
-
-        # Set up Lambda integration
-        aws apigateway put-integration \
-            --rest-api-id "$API_ID" \
-            --resource-id "$TOKENIZE_SUB_RESOURCE_ID" \
-            --http-method POST \
-            --type AWS_PROXY \
-            --integration-http-method POST \
-            --uri "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_ARN}/invocations" 2>/dev/null || true
-    done
-
-    echo -e "${GREEN}✓ API Gateway configured (with tokenize and detokenize data-type paths)${NC}"
+    echo -e "${GREEN}✓ API Gateway configured with single /process endpoint${NC}"
     echo ""
 
     # Step 7: Grant API Gateway permission to invoke Lambda
@@ -660,7 +666,7 @@ EOF
         --stage-name prod \
         --description "Production deployment" > /dev/null
 
-    API_URL="https://${API_ID}.execute-api.${AWS_REGION}.amazonaws.com/prod/detokenize"
+    API_URL="https://${API_ID}.execute-api.${AWS_REGION}.amazonaws.com/prod/process"
 
     echo -e "${GREEN}✓ API deployed${NC}"
     echo ""
@@ -804,6 +810,38 @@ EOF
 # ============================================================================
 # Destroy Function
 # ============================================================================
+# ============================================================================
+# Restore Placeholders Function
+# ============================================================================
+restore_placeholders() {
+    echo -e "${BLUE}Restoring placeholders in SQL template files...${NC}"
+
+    # Restore setup.sql placeholders
+    if [ -f "snowflake/setup.sql" ]; then
+        # Restore AWS account ID placeholder (matches 12 digits)
+        sed -i.bak "s|arn:aws:iam::[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]:role/SnowflakeAPIRole|arn:aws:iam::YOUR_AWS_ACCOUNT_ID:role/SnowflakeAPIRole|g" snowflake/setup.sql
+
+        # Restore API Gateway URL placeholder in API_ALLOWED_PREFIXES
+        # Match pattern: https://<api-id>.execute-api.<region>.amazonaws.com/
+        sed -i.bak "s|https://[a-z0-9][a-z0-9][a-z0-9][a-z0-9][a-z0-9][a-z0-9][a-z0-9][a-z0-9][a-z0-9][a-z0-9]\.execute-api\.[a-z0-9-][a-z0-9-]*\.amazonaws\.com/|https://YOUR_API_GATEWAY_ID.execute-api.YOUR_REGION.amazonaws.com/|g" snowflake/setup.sql
+
+        rm -f snowflake/setup.sql.bak
+        echo -e "  ${GREEN}✓${NC} snowflake/setup.sql"
+    fi
+
+    # Restore create_function.sql placeholders
+    if [ -f "snowflake/create_function.sql" ]; then
+        # Restore API Gateway URL placeholder in all function AS clauses
+        # Match pattern: https://<api-id>.execute-api.<region>.amazonaws.com/prod/process
+        sed -i.bak "s|https://[a-z0-9][a-z0-9][a-z0-9][a-z0-9][a-z0-9][a-z0-9][a-z0-9][a-z0-9][a-z0-9][a-z0-9]\.execute-api\.[a-z0-9-][a-z0-9-]*\.amazonaws\.com/prod/process|https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process|g" snowflake/create_function.sql
+
+        rm -f snowflake/create_function.sql.bak
+        echo -e "  ${GREEN}✓${NC} snowflake/create_function.sql"
+    fi
+
+    echo ""
+}
+
 destroy() {
     echo -e "${RED}Starting destruction...${NC}"
     echo ""
@@ -968,6 +1006,9 @@ EOF
     rm -f deployment-info.txt
     echo -e "${GREEN}✓ Local files cleaned${NC}"
     echo ""
+
+    # Restore placeholders in SQL files
+    restore_placeholders
 
     echo -e "${GREEN}============================================================================${NC}"
     echo -e "${GREEN}Destruction Complete!${NC}"
@@ -1135,6 +1176,14 @@ setup_snowflake() {
         exit 1
     fi
 
+    # Check if config.json exists for Snowflake credentials
+    if [ "$CONFIG_FILE_EXISTS" = false ]; then
+        echo -e "${RED}Error: config.json not found at $CONFIG_FILE${NC}"
+        echo -e "${YELLOW}Snowflake setup requires config.json with Snowflake credentials${NC}"
+        echo -e "Please create $CONFIG_FILE with Snowflake credentials"
+        exit 1
+    fi
+
     # Extract Snowflake config
     SF_USER=$(jq -r '.snowflake.user' "$CONFIG_FILE")
     SF_PASSWORD=$(jq -r '.snowflake.password' "$CONFIG_FILE")
@@ -1143,6 +1192,13 @@ setup_snowflake() {
     SF_SCHEMA=$(jq -r '.snowflake.schema' "$CONFIG_FILE")
     SF_WAREHOUSE=$(jq -r '.snowflake.warehouse' "$CONFIG_FILE")
     SF_ROLE=$(jq -r '.snowflake.role' "$CONFIG_FILE")
+
+    # Validate Snowflake credentials
+    if [ "$SF_USER" == "null" ] || [ -z "$SF_USER" ] || [ "$SF_PASSWORD" == "null" ] || [ -z "$SF_PASSWORD" ]; then
+        echo -e "${RED}Error: Snowflake credentials not found in config.json${NC}"
+        echo -e "${YELLOW}Please add Snowflake credentials to $CONFIG_FILE${NC}"
+        exit 1
+    fi
 
     # Apply overrides if provided
     if [ -n "$OVERRIDE_DATABASE" ]; then
@@ -1290,10 +1346,8 @@ EOF
 
     echo -e "${YELLOW}[4/4]${NC} Creating external functions..."
 
-    # Get API Gateway details
-    API_BASE_URL=$(echo "${API_URL}" | sed 's|/detokenize$||')
-
-    # Create functions - 4 detokenize + 4 tokenize (8 total)
+    # Create functions - 5 detokenize + 5 tokenize (10 total)
+    # Uses headers for operation/dataType + context headers for audit
     cat > .snowflake-create-function.sql <<EOF
 USE ROLE ${SF_ROLE};
 USE DATABASE ${SF_DATABASE};
@@ -1303,43 +1357,103 @@ USE SCHEMA ${SF_SCHEMA};
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_NAME(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS '${API_BASE_URL}/detokenize/name';
+    HEADERS = (
+        'X-Operation' = 'detokenize',
+        'X-Data-Type' = 'NAME'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS '${API_URL}';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_ID(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS '${API_BASE_URL}/detokenize/id';
+    HEADERS = (
+        'X-Operation' = 'detokenize',
+        'X-Data-Type' = 'ID'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS '${API_URL}';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_DOB(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS '${API_BASE_URL}/detokenize/dob';
+    HEADERS = (
+        'X-Operation' = 'detokenize',
+        'X-Data-Type' = 'DOB'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS '${API_URL}';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_SSN(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS '${API_BASE_URL}/detokenize/ssn';
+    HEADERS = (
+        'X-Operation' = 'detokenize',
+        'X-Data-Type' = 'SSN'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS '${API_URL}';
 
 -- Tokenization functions
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_NAME(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS '${API_BASE_URL}/tokenize/name';
+    HEADERS = (
+        'X-Operation' = 'tokenize',
+        'X-Data-Type' = 'NAME'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS '${API_URL}';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_ID(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS '${API_BASE_URL}/tokenize/id';
+    HEADERS = (
+        'X-Operation' = 'tokenize',
+        'X-Data-Type' = 'ID'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS '${API_URL}';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_DOB(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS '${API_BASE_URL}/tokenize/dob';
+    HEADERS = (
+        'X-Operation' = 'tokenize',
+        'X-Data-Type' = 'DOB'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS '${API_URL}';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_SSN(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    AS '${API_BASE_URL}/tokenize/ssn';
+    HEADERS = (
+        'X-Operation' = 'tokenize',
+        'X-Data-Type' = 'SSN'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS '${API_URL}';
+
+CREATE OR REPLACE EXTERNAL FUNCTION DETOK_DOB_PRESERVE_YYYY(token VARCHAR)
+    RETURNS VARCHAR
+    API_INTEGRATION = skyflow_api_integration
+    HEADERS = (
+        'X-Operation' = 'detokenize',
+        'X-Data-Type' = 'DOB_PRESERVE_YYYY'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS '${API_URL}';
+
+CREATE OR REPLACE EXTERNAL FUNCTION TOK_DOB_PRESERVE_YYYY(plaintext VARCHAR)
+    RETURNS VARCHAR
+    API_INTEGRATION = skyflow_api_integration
+    HEADERS = (
+        'X-Operation' = 'tokenize',
+        'X-Data-Type' = 'DOB_PRESERVE_YYYY'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS '${API_URL}';
 EOF
 
     set +e  # Temporarily disable exit on error
@@ -1378,15 +1492,15 @@ EOF
         exit 1
     fi
 
-    # Check if all CREATE statements succeeded (expect 8: 4 DETOK_* + 4 TOK_*)
-    SUCCESS_COUNT=$(echo "$FUNCTION_OUTPUT" | grep -c "Statement executed successfully")
-    if [ "$SUCCESS_COUNT" -ge 8 ]; then
-        echo -e "${GREEN}✓ All 8 functions created successfully${NC}"
-        echo -e "${GREEN}  - DETOK_NAME, DETOK_ID, DETOK_DOB, DETOK_SSN${NC}"
-        echo -e "${GREEN}  - TOK_NAME, TOK_ID, TOK_DOB, TOK_SSN${NC}"
+    # Check if all CREATE statements succeeded (expect 10: 5 DETOK_* + 5 TOK_*)
+    SUCCESS_COUNT=$(echo "$FUNCTION_OUTPUT" | grep -c "successfully created")
+    if [ "$SUCCESS_COUNT" -ge 10 ]; then
+        echo -e "${GREEN}✓ All 10 functions created successfully${NC}"
+        echo -e "${GREEN}  - DETOK_NAME, DETOK_ID, DETOK_DOB, DETOK_SSN, DETOK_DOB_PRESERVE_YYYY${NC}"
+        echo -e "${GREEN}  - TOK_NAME, TOK_ID, TOK_DOB, TOK_SSN, TOK_DOB_PRESERVE_YYYY${NC}"
         rm -f .snowflake-create-function.sql
     else
-        echo -e "${YELLOW}⚠ Unexpected output (only $SUCCESS_COUNT success messages, expected 8)${NC}"
+        echo -e "${YELLOW}⚠ Unexpected output (only $SUCCESS_COUNT success messages, expected 10)${NC}"
         echo -e "${YELLOW}SQL file saved to: .snowflake-create-function.sql${NC}"
         echo ""
         echo -e "${BLUE}Output:${NC}"
@@ -1409,6 +1523,14 @@ EOF
 # Test Function
 # ============================================================================
 test_snowflake() {
+    # Check if config.json exists for Snowflake credentials
+    if [ "$CONFIG_FILE_EXISTS" = false ]; then
+        echo -e "${RED}Error: config.json not found at $CONFIG_FILE${NC}"
+        echo -e "${YELLOW}Testing requires config.json with Snowflake credentials${NC}"
+        echo -e "Please create $CONFIG_FILE with Snowflake credentials"
+        exit 1
+    fi
+
     SF_USER=$(jq -r '.snowflake.user' "$CONFIG_FILE")
     SF_PASSWORD=$(jq -r '.snowflake.password' "$CONFIG_FILE")
     SF_ACCOUNT=$(jq -r '.snowflake.account' "$CONFIG_FILE")
@@ -1416,6 +1538,13 @@ test_snowflake() {
     SF_SCHEMA=$(jq -r '.snowflake.schema' "$CONFIG_FILE")
     SF_WAREHOUSE=$(jq -r '.snowflake.warehouse' "$CONFIG_FILE")
     SF_ROLE=$(jq -r '.snowflake.role' "$CONFIG_FILE")
+
+    # Validate Snowflake credentials
+    if [ "$SF_USER" == "null" ] || [ -z "$SF_USER" ] || [ "$SF_PASSWORD" == "null" ] || [ -z "$SF_PASSWORD" ]; then
+        echo -e "${RED}Error: Snowflake credentials not found in config.json${NC}"
+        echo -e "${YELLOW}Please add Snowflake credentials to $CONFIG_FILE${NC}"
+        exit 1
+    fi
 
     echo -e "${BLUE}Testing Snowflake integration...${NC}"
     echo ""
