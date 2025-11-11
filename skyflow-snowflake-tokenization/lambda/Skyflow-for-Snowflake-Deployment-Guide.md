@@ -59,8 +59,9 @@ Before starting, gather these values:
 - **Authentication credentials** (choose one):
   - **JWT (Service Account)**: Client ID, private key, token URI, key ID (recommended)
   - **API Key**: Bearer token
-- Vault IDs for each data type (NAME, ID, DOB, SSN)
+- Vault IDs for each data type (NAME, ID, DOB, SSN, DOB_PRESERVE_YYYY)
 - Table and column names for each data type
+- For DOB_PRESERVE_YYYY: Additional column names (dob_full, dob_year, month_day_token)
 
 **From AWS:**
 - AWS Account ID
@@ -179,6 +180,16 @@ Create `skyflow-config.json` with your Skyflow credentials. You can use either *
           "minLength": 3,
           "stripPunctuation": true
         }
+      },
+      {
+        "vaultId": "YOUR_VAULT_ID_FOR_DOB_PRESERVE_YYYY",
+        "table": "persons",
+        "dataType": "DOB_PRESERVE_YYYY",
+        "columns": {
+          "dob_full": "date_of_birth",
+          "dob_year": "dob_year",
+          "month_day_token": "month_day_token"
+        }
       }
     ]
   },
@@ -245,6 +256,16 @@ Create `skyflow-config.json` with your Skyflow credentials. You can use either *
           "uppercase": false,
           "minLength": 3,
           "stripPunctuation": true
+        }
+      },
+      {
+        "vaultId": "YOUR_VAULT_ID_FOR_DOB_PRESERVE_YYYY",
+        "table": "persons",
+        "dataType": "DOB_PRESERVE_YYYY",
+        "columns": {
+          "dob_full": "date_of_birth",
+          "dob_year": "dob_year",
+          "month_day_token": "month_day_token"
         }
       }
     ]
@@ -943,6 +964,7 @@ The Lambda function supports data transformations that are applied before tokeni
 | **NAME**  | ✅ Yes     | ✅ Yes             | 3 chars    | None       |
 | **ID**    | ✅ Yes     | ✅ Yes             | 3 chars    | None       |
 | **DOB**   | ❌ No      | ✅ Yes             | None       | Date range: 0600-01-01 to 3337-11-27 |
+| **DOB_PRESERVE_YYYY** | ❌ No | ❌ No | None | Date format: YYYY-MM-DD (bypasses preprocessing, preserves year) |
 | **SSN**   | ❌ No      | ✅ Yes             | 3 chars    | None       |
 
 **How Transformations Work:**
@@ -972,6 +994,8 @@ The Lambda function supports data transformations that are applied before tokeni
 3. Check minimum length (if specified) - if too short, return original and skip tokenization
 4. Apply uppercase (if enabled)
 5. Tokenize processed value
+
+**Note:** DOB_PRESERVE_YYYY bypasses all preprocessing steps above. It only validates the date format (YYYY-MM-DD) and does not apply any transformations.
 
 ### Performance Settings
 
@@ -1306,7 +1330,7 @@ Create a file `env-vars.json` with your settings:
   "SKYFLOW_PRIVATE_KEY": "-----BEGIN PRIVATE KEY-----\\nYOUR_KEY_HERE\\n-----END PRIVATE KEY-----\\n",
   "SKYFLOW_KEY_ALGORITHM": "KEY_ALG_RSA_2048",
   "SKYFLOW_VAULT_URL": "https://YOUR_CLUSTER_ID.vault.skyflowapis.com",
-  "SKYFLOW_VAULT_DEFINITIONS": "[{\"vaultId\":\"vault1\",\"table\":\"persons\",\"column\":\"name\",\"dataType\":\"NAME\",\"transformations\":{\"uppercase\":true,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault2\",\"table\":\"persons\",\"column\":\"person_id\",\"dataType\":\"ID\",\"transformations\":{\"uppercase\":true,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault3\",\"table\":\"persons\",\"column\":\"date_of_birth\",\"dataType\":\"DOB\",\"transformations\":{\"uppercase\":false,\"stripPunctuation\":true,\"validation\":{\"minDate\":\"0600-01-01\",\"maxDate\":\"3337-11-27\"}}},{\"vaultId\":\"vault4\",\"table\":\"persons\",\"column\":\"ssn\",\"dataType\":\"SSN\",\"transformations\":{\"uppercase\":false,\"minLength\":3,\"stripPunctuation\":true}}]",
+  "SKYFLOW_VAULT_DEFINITIONS": "[{\"vaultId\":\"vault1\",\"table\":\"persons\",\"column\":\"name\",\"dataType\":\"NAME\",\"transformations\":{\"uppercase\":true,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault2\",\"table\":\"persons\",\"column\":\"person_id\",\"dataType\":\"ID\",\"transformations\":{\"uppercase\":true,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault3\",\"table\":\"persons\",\"column\":\"date_of_birth\",\"dataType\":\"DOB\",\"transformations\":{\"uppercase\":false,\"stripPunctuation\":true,\"validation\":{\"minDate\":\"0600-01-01\",\"maxDate\":\"3337-11-27\"}}},{\"vaultId\":\"vault4\",\"table\":\"persons\",\"column\":\"ssn\",\"dataType\":\"SSN\",\"transformations\":{\"uppercase\":false,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault5\",\"table\":\"persons\",\"dataType\":\"DOB_PRESERVE_YYYY\",\"columns\":{\"dob_full\":\"date_of_birth\",\"dob_year\":\"dob_year\",\"month_day_token\":\"month_day_token\"}}]",
   "SKYFLOW_TOKENIZE_BATCH_SIZE": "5",
   "SKYFLOW_TOKENIZE_MAX_CONCURRENCY": "400",
   "SKYFLOW_DETOKENIZE_BATCH_SIZE": "100",
