@@ -64,6 +64,8 @@ async function loadConfig() {
         tokenizeMaxConcurrency: parseInt(process.env.SKYFLOW_TOKENIZE_MAX_CONCURRENCY, 10),
         detokenizeBatchSize: parseInt(process.env.SKYFLOW_DETOKENIZE_BATCH_SIZE, 10),
         detokenizeMaxConcurrency: parseInt(process.env.SKYFLOW_DETOKENIZE_MAX_CONCURRENCY, 10),
+        deleteBatchSize: parseInt(process.env.SKYFLOW_DELETE_BATCH_SIZE, 10),
+        deleteMaxConcurrency: parseInt(process.env.SKYFLOW_DELETE_MAX_CONCURRENCY, 10),
         logLevel: process.env.SKYFLOW_LOG_LEVEL || 'INFO'
     };
 
@@ -266,6 +268,22 @@ function normalizeConfig(config) {
         throw new Error('detokenizeMaxConcurrency must be a positive number');
     }
 
+    // Validate delete batch size
+    if (!config.deleteBatchSize) {
+        throw new Error('Missing deleteBatchSize in configuration');
+    }
+    if (typeof config.deleteBatchSize !== 'number' || config.deleteBatchSize < 1) {
+        throw new Error('deleteBatchSize must be a positive number');
+    }
+
+    // Validate delete max concurrency
+    if (!config.deleteMaxConcurrency) {
+        throw new Error('Missing deleteMaxConcurrency in configuration');
+    }
+    if (typeof config.deleteMaxConcurrency !== 'number' || config.deleteMaxConcurrency < 1) {
+        throw new Error('deleteMaxConcurrency must be a positive number');
+    }
+
     console.log('Configuration validated successfully', {
         vaultCount: config.vaults.length,
         dataTypes: Object.keys(config.vaultsByDataType),
@@ -277,6 +295,10 @@ function normalizeConfig(config) {
         detokenize: {
             batchSize: config.detokenizeBatchSize,
             maxConcurrency: config.detokenizeMaxConcurrency
+        },
+        delete: {
+            batchSize: config.deleteBatchSize,
+            maxConcurrency: config.deleteMaxConcurrency
         }
     });
 
@@ -347,7 +369,10 @@ function convertOldToNewFormat(oldConfig) {
         tokenizeBatchSize: oldConfig.tokenize_batch_size || oldConfig.tokenizeBatchSize || oldConfig.batchSize || 100,
         tokenizeMaxConcurrency: oldConfig.tokenize_max_concurrency || oldConfig.tokenizeMaxConcurrency || oldConfig.maxConcurrency || 20,
         detokenizeBatchSize: oldConfig.detokenize_batch_size || oldConfig.detokenizeBatchSize || oldConfig.batchSize || 100,
-        detokenizeMaxConcurrency: oldConfig.detokenize_max_concurrency || oldConfig.detokenizeMaxConcurrency || oldConfig.maxConcurrency || 20
+        detokenizeMaxConcurrency: oldConfig.detokenize_max_concurrency || oldConfig.detokenizeMaxConcurrency || oldConfig.maxConcurrency || 20,
+        // Delete values (for one-way tokenization)
+        deleteBatchSize: oldConfig.delete_batch_size || oldConfig.deleteBatchSize || 25,
+        deleteMaxConcurrency: oldConfig.delete_max_concurrency || oldConfig.deleteMaxConcurrency || 100
     };
 
     console.log('Old config converted successfully', {

@@ -58,25 +58,6 @@
           "minLength": 3,
           "stripPunctuation": false
         }
-      },
-      {
-        "vaultId": "YOUR_VAULT_ID_FOR_DOB_PRESERVE_YYYY",
-        "table": "month_day",
-        "column": "dob_full",
-        "dataType": "DOB_PRESERVE_YYYY",
-        "columns": {
-          "dob_full": "dob_full",
-          "dob_year": "dob_year",
-          "month_day_token": "month_day_token"
-        },
-        "transformations": {
-          "uppercase": false,
-          "stripPunctuation": false,
-          "validation": {
-            "minDate": "0600-01-01",
-            "maxDate": "3337-11-27"
-          }
-        }
       }
     ]
   },
@@ -85,5 +66,7 @@
   "tokenizeMaxConcurrency": 400,
   "detokenizeBatchSize": 100,
   "detokenizeMaxConcurrency": 500,
+  "deleteBatchSize": 25,
+  "deleteMaxConcurrency": 100,
   "logLevel": "ERROR"
 }
