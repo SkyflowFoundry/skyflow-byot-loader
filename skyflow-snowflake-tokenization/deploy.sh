@@ -932,12 +932,26 @@ DROP FUNCTION IF EXISTS DETOK_NAME(VARCHAR);
 DROP FUNCTION IF EXISTS DETOK_ID(VARCHAR);
 DROP FUNCTION IF EXISTS DETOK_DOB(VARCHAR);
 DROP FUNCTION IF EXISTS DETOK_SSN(VARCHAR);
+DROP FUNCTION IF EXISTS DETOK_SSN_PARTIAL(VARCHAR);
 
 -- Drop tokenization functions
 DROP FUNCTION IF EXISTS TOK_NAME(VARCHAR);
 DROP FUNCTION IF EXISTS TOK_ID(VARCHAR);
 DROP FUNCTION IF EXISTS TOK_DOB(VARCHAR);
 DROP FUNCTION IF EXISTS TOK_SSN(VARCHAR);
+DROP FUNCTION IF EXISTS TOK_SSN_PARTIAL(VARCHAR);
+
+-- Drop one-way tokenization functions
+DROP FUNCTION IF EXISTS TOK_ONEWAY_NAME(VARCHAR);
+DROP FUNCTION IF EXISTS TOK_ONEWAY_ID(VARCHAR);
+DROP FUNCTION IF EXISTS TOK_ONEWAY_DOB(VARCHAR);
+DROP FUNCTION IF EXISTS TOK_ONEWAY_SSN(VARCHAR);
+
+-- Drop BYOT functions
+DROP FUNCTION IF EXISTS BYOT_NAME(VARCHAR, VARCHAR);
+DROP FUNCTION IF EXISTS BYOT_ID(VARCHAR, VARCHAR);
+DROP FUNCTION IF EXISTS BYOT_DOB(VARCHAR, VARCHAR);
+DROP FUNCTION IF EXISTS BYOT_SSN(VARCHAR, VARCHAR);
 
 -- Drop API integration
 DROP API INTEGRATION IF EXISTS skyflow_api_integration;
@@ -986,10 +1000,20 @@ EOF
             echo -e "  DROP FUNCTION IF EXISTS DETOK_ID(VARCHAR);"
             echo -e "  DROP FUNCTION IF EXISTS DETOK_DOB(VARCHAR);"
             echo -e "  DROP FUNCTION IF EXISTS DETOK_SSN(VARCHAR);"
+            echo -e "  DROP FUNCTION IF EXISTS DETOK_SSN_PARTIAL(VARCHAR);"
             echo -e "  DROP FUNCTION IF EXISTS TOK_NAME(VARCHAR);"
             echo -e "  DROP FUNCTION IF EXISTS TOK_ID(VARCHAR);"
             echo -e "  DROP FUNCTION IF EXISTS TOK_DOB(VARCHAR);"
             echo -e "  DROP FUNCTION IF EXISTS TOK_SSN(VARCHAR);"
+            echo -e "  DROP FUNCTION IF EXISTS TOK_SSN_PARTIAL(VARCHAR);"
+            echo -e "  DROP FUNCTION IF EXISTS TOK_ONEWAY_NAME(VARCHAR);"
+            echo -e "  DROP FUNCTION IF EXISTS TOK_ONEWAY_ID(VARCHAR);"
+            echo -e "  DROP FUNCTION IF EXISTS TOK_ONEWAY_DOB(VARCHAR);"
+            echo -e "  DROP FUNCTION IF EXISTS TOK_ONEWAY_SSN(VARCHAR);"
+            echo -e "  DROP FUNCTION IF EXISTS BYOT_NAME(VARCHAR, VARCHAR);"
+            echo -e "  DROP FUNCTION IF EXISTS BYOT_ID(VARCHAR, VARCHAR);"
+            echo -e "  DROP FUNCTION IF EXISTS BYOT_DOB(VARCHAR, VARCHAR);"
+            echo -e "  DROP FUNCTION IF EXISTS BYOT_SSN(VARCHAR, VARCHAR);"
             echo -e "  DROP API INTEGRATION IF EXISTS skyflow_api_integration;"
         fi
         echo ""
@@ -1346,115 +1370,39 @@ EOF
 
     echo -e "${YELLOW}[4/4]${NC} Creating external functions..."
 
-    # Create functions - 5 detokenize + 5 tokenize (10 total)
-    # Uses headers for operation/dataType + context headers for audit
+    # Extract CREATE FUNCTION statements from create_function.sql (already has correct API_URL from earlier sed)
+    # Skip comments, GRANT statements, test queries, etc.
     cat > .snowflake-create-function.sql <<EOF
 USE ROLE ${SF_ROLE};
 USE DATABASE ${SF_DATABASE};
 USE SCHEMA ${SF_SCHEMA};
 
--- Detokenization functions
-CREATE OR REPLACE EXTERNAL FUNCTION DETOK_NAME(token VARCHAR)
-    RETURNS VARCHAR
-    API_INTEGRATION = skyflow_api_integration
-    HEADERS = (
-        'X-Operation' = 'detokenize',
-        'X-Data-Type' = 'NAME'
-    )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
-    AS '${API_URL}';
-
-CREATE OR REPLACE EXTERNAL FUNCTION DETOK_ID(token VARCHAR)
-    RETURNS VARCHAR
-    API_INTEGRATION = skyflow_api_integration
-    HEADERS = (
-        'X-Operation' = 'detokenize',
-        'X-Data-Type' = 'ID'
-    )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
-    AS '${API_URL}';
-
-CREATE OR REPLACE EXTERNAL FUNCTION DETOK_DOB(token VARCHAR)
-    RETURNS VARCHAR
-    API_INTEGRATION = skyflow_api_integration
-    HEADERS = (
-        'X-Operation' = 'detokenize',
-        'X-Data-Type' = 'DOB'
-    )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
-    AS '${API_URL}';
-
-CREATE OR REPLACE EXTERNAL FUNCTION DETOK_SSN(token VARCHAR)
-    RETURNS VARCHAR
-    API_INTEGRATION = skyflow_api_integration
-    HEADERS = (
-        'X-Operation' = 'detokenize',
-        'X-Data-Type' = 'SSN'
-    )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
-    AS '${API_URL}';
-
--- Tokenization functions
-CREATE OR REPLACE EXTERNAL FUNCTION TOK_NAME(plaintext VARCHAR)
-    RETURNS VARCHAR
-    API_INTEGRATION = skyflow_api_integration
-    HEADERS = (
-        'X-Operation' = 'tokenize',
-        'X-Data-Type' = 'NAME'
-    )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
-    AS '${API_URL}';
-
-CREATE OR REPLACE EXTERNAL FUNCTION TOK_ID(plaintext VARCHAR)
-    RETURNS VARCHAR
-    API_INTEGRATION = skyflow_api_integration
-    HEADERS = (
-        'X-Operation' = 'tokenize',
-        'X-Data-Type' = 'ID'
-    )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
-    AS '${API_URL}';
-
-CREATE OR REPLACE EXTERNAL FUNCTION TOK_DOB(plaintext VARCHAR)
-    RETURNS VARCHAR
-    API_INTEGRATION = skyflow_api_integration
-    HEADERS = (
-        'X-Operation' = 'tokenize',
-        'X-Data-Type' = 'DOB'
-    )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
-    AS '${API_URL}';
-
-CREATE OR REPLACE EXTERNAL FUNCTION TOK_SSN(plaintext VARCHAR)
-    RETURNS VARCHAR
-    API_INTEGRATION = skyflow_api_integration
-    HEADERS = (
-        'X-Operation' = 'tokenize',
-        'X-Data-Type' = 'SSN'
-    )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
-    AS '${API_URL}';
-
-CREATE OR REPLACE EXTERNAL FUNCTION DETOK_DOB_PRESERVE_YYYY(token VARCHAR)
-    RETURNS VARCHAR
-    API_INTEGRATION = skyflow_api_integration
-    HEADERS = (
-        'X-Operation' = 'detokenize',
-        'X-Data-Type' = 'DOB_PRESERVE_YYYY'
-    )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
-    AS '${API_URL}';
-
-CREATE OR REPLACE EXTERNAL FUNCTION TOK_DOB_PRESERVE_YYYY(plaintext VARCHAR)
-    RETURNS VARCHAR
-    API_INTEGRATION = skyflow_api_integration
-    HEADERS = (
-        'X-Operation' = 'tokenize',
-        'X-Data-Type' = 'DOB_PRESERVE_YYYY'
-    )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
-    AS '${API_URL}';
 EOF
+
+    # Extract all CREATE OR REPLACE EXTERNAL FUNCTION blocks from create_function.sql
+    # This reads from the source of truth instead of duplicating function definitions
+    awk '
+        /^CREATE OR REPLACE EXTERNAL FUNCTION/ {
+            in_function=1
+        }
+        in_function {
+            print
+        }
+        in_function && /;$/ {
+            in_function=0
+            print ""
+        }
+    ' snowflake/create_function.sql >> .snowflake-create-function.sql
+
+    # Verify we extracted functions
+    FUNCTION_COUNT=$(grep -c "^CREATE OR REPLACE EXTERNAL FUNCTION" .snowflake-create-function.sql || echo "0")
+    if [ "$FUNCTION_COUNT" -eq 0 ]; then
+        echo -e "${RED}✗ Failed to extract functions from create_function.sql${NC}"
+        exit 1
+    fi
+
+    echo -e "  Extracted $FUNCTION_COUNT function definitions from create_function.sql"
+    echo ""
 
     set +e  # Temporarily disable exit on error
     FUNCTION_OUTPUT=$(SNOWSQL_ACCOUNT="$SF_ACCOUNT" \
@@ -1492,15 +1440,18 @@ EOF
         exit 1
     fi
 
-    # Check if all CREATE statements succeeded (expect 10: 5 DETOK_* + 5 TOK_*)
+    # Check if all CREATE statements succeeded (expect 21: 6 DETOK_* + 6 TOK_* + 4 TOK_ONEWAY_* + 4 BYOT_* + 1 SKYFLOW_QUERY)
     SUCCESS_COUNT=$(echo "$FUNCTION_OUTPUT" | grep -c "successfully created")
-    if [ "$SUCCESS_COUNT" -ge 10 ]; then
-        echo -e "${GREEN}✓ All 10 functions created successfully${NC}"
-        echo -e "${GREEN}  - DETOK_NAME, DETOK_ID, DETOK_DOB, DETOK_SSN, DETOK_DOB_PRESERVE_YYYY${NC}"
-        echo -e "${GREEN}  - TOK_NAME, TOK_ID, TOK_DOB, TOK_SSN, TOK_DOB_PRESERVE_YYYY${NC}"
+    if [ "$SUCCESS_COUNT" -ge 21 ]; then
+        echo -e "${GREEN}✓ All 21 functions created successfully${NC}"
+        echo -e "${GREEN}  - DETOK_NAME, DETOK_ID, DETOK_DOB (year preserved), DETOK_SSN, DETOK_SSN_PARTIAL, DETOK_EMAIL${NC}"
+        echo -e "${GREEN}  - TOK_NAME, TOK_ID, TOK_DOB (year preserved), TOK_SSN, TOK_SSN_PARTIAL, TOK_EMAIL${NC}"
+        echo -e "${GREEN}  - TOK_ONEWAY_NAME, TOK_ONEWAY_ID, TOK_ONEWAY_DOB, TOK_ONEWAY_SSN${NC}"
+        echo -e "${GREEN}  - BYOT_NAME, BYOT_ID, BYOT_DOB, BYOT_SSN${NC}"
+        echo -e "${GREEN}  - SKYFLOW_QUERY (privacy-preserving analytics)${NC}"
         rm -f .snowflake-create-function.sql
     else
-        echo -e "${YELLOW}⚠ Unexpected output (only $SUCCESS_COUNT success messages, expected 10)${NC}"
+        echo -e "${YELLOW}⚠ Unexpected output (only $SUCCESS_COUNT success messages, expected 21)${NC}"
         echo -e "${YELLOW}SQL file saved to: .snowflake-create-function.sql${NC}"
         echo ""
         echo -e "${BLUE}Output:${NC}"
@@ -1555,6 +1506,7 @@ USE DATABASE ${SF_DATABASE};
 USE SCHEMA ${SF_SCHEMA};
 SHOW FUNCTIONS LIKE 'DETOK_%';
 SHOW FUNCTIONS LIKE 'TOK_%';
+SHOW FUNCTIONS LIKE 'SKYFLOW_QUERY%';
 SELECT '✓ Functions are available' as status;
 EOF
 
@@ -1573,6 +1525,7 @@ EOF
     echo -e "${YELLOW}Test with your data:${NC}"
     echo -e "  ${BLUE}SELECT TOK_NAME('John Doe');${NC}"
     echo -e "  ${BLUE}SELECT DETOK_NAME(token_column) FROM your_table LIMIT 10;${NC}"
+    echo -e "  ${BLUE}SELECT value FROM TABLE(FLATTEN(SKYFLOW_QUERY('SELECT COUNT(*) as count FROM name')));${NC}"
     echo ""
 }
 
