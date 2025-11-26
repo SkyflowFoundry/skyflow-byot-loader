@@ -1440,18 +1440,18 @@ EOF
         exit 1
     fi
 
-    # Check if all CREATE statements succeeded (expect 19: 5 DETOK_* + 5 TOK_* + 4 TOK_ONEWAY_* + 4 BYOT_* + 1 SKYFLOW_QUERY)
+    # Check if all CREATE statements succeeded (expect 21: 6 DETOK_* + 6 TOK_* + 4 TOK_ONEWAY_* + 4 BYOT_* + 1 SKYFLOW_QUERY)
     SUCCESS_COUNT=$(echo "$FUNCTION_OUTPUT" | grep -c "successfully created")
-    if [ "$SUCCESS_COUNT" -ge 19 ]; then
-        echo -e "${GREEN}✓ All 19 functions created successfully${NC}"
-        echo -e "${GREEN}  - DETOK_NAME, DETOK_ID, DETOK_DOB (year preserved), DETOK_SSN, DETOK_SSN_PARTIAL${NC}"
-        echo -e "${GREEN}  - TOK_NAME, TOK_ID, TOK_DOB (year preserved), TOK_SSN, TOK_SSN_PARTIAL${NC}"
+    if [ "$SUCCESS_COUNT" -ge 21 ]; then
+        echo -e "${GREEN}✓ All 21 functions created successfully${NC}"
+        echo -e "${GREEN}  - DETOK_NAME, DETOK_ID, DETOK_DOB (year preserved), DETOK_SSN, DETOK_SSN_PARTIAL, DETOK_EMAIL${NC}"
+        echo -e "${GREEN}  - TOK_NAME, TOK_ID, TOK_DOB (year preserved), TOK_SSN, TOK_SSN_PARTIAL, TOK_EMAIL${NC}"
         echo -e "${GREEN}  - TOK_ONEWAY_NAME, TOK_ONEWAY_ID, TOK_ONEWAY_DOB, TOK_ONEWAY_SSN${NC}"
         echo -e "${GREEN}  - BYOT_NAME, BYOT_ID, BYOT_DOB, BYOT_SSN${NC}"
         echo -e "${GREEN}  - SKYFLOW_QUERY (privacy-preserving analytics)${NC}"
         rm -f .snowflake-create-function.sql
     else
-        echo -e "${YELLOW}⚠ Unexpected output (only $SUCCESS_COUNT success messages, expected 19)${NC}"
+        echo -e "${YELLOW}⚠ Unexpected output (only $SUCCESS_COUNT success messages, expected 21)${NC}"
         echo -e "${YELLOW}SQL file saved to: .snowflake-create-function.sql${NC}"
         echo ""
         echo -e "${BLUE}Output:${NC}"

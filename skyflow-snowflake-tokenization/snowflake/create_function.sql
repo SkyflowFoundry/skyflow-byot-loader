@@ -75,6 +75,16 @@ CREATE OR REPLACE EXTERNAL FUNCTION DETOK_SSN_PARTIAL(token VARCHAR)
     CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
+CREATE OR REPLACE EXTERNAL FUNCTION DETOK_EMAIL(token VARCHAR)
+    RETURNS VARCHAR
+    API_INTEGRATION = skyflow_api_integration
+    HEADERS = (
+        'X-Operation' = 'detokenize',
+        'X-Data-Type' = 'EMAIL'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
+
 -- ============================================================================
 -- Tokenization Functions
 -- ============================================================================
@@ -132,6 +142,16 @@ CREATE OR REPLACE EXTERNAL FUNCTION TOK_SSN_PARTIAL(plaintext VARCHAR)
     CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
+CREATE OR REPLACE EXTERNAL FUNCTION TOK_EMAIL(plaintext VARCHAR)
+    RETURNS VARCHAR
+    API_INTEGRATION = skyflow_api_integration
+    HEADERS = (
+        'X-Operation' = 'tokenize',
+        'X-Data-Type' = 'EMAIL'
+    )
+    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
+
 -- ============================================================================
 -- One-Way Tokenization Functions (Token + Delete)
 -- ============================================================================
@@ -149,9 +169,7 @@ CREATE OR REPLACE EXTERNAL FUNCTION TOK_SSN_PARTIAL(plaintext VARCHAR)
 -- Setup Required:
 -- 1. Create <table>_oneway tables in your Skyflow vaults (e.g., name_oneway, ssn_oneway)
 -- 2. Add corresponding <column>_oneway columns (e.g., name_oneway column in name_oneway table)
--- 3. For DOB_PRESERVE_YYYY: Create month_day_oneway table with dob_full_oneway,
---    dob_year_oneway, and month_day_token_oneway columns
--- 4. No changes needed to skyflow-config.json (uses existing vault definitions)
+-- 3. No changes needed to skyflow-config.json (uses existing vault definitions)
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_ONEWAY_NAME(plaintext VARCHAR)
     RETURNS VARCHAR
@@ -262,9 +280,9 @@ CREATE OR REPLACE EXTERNAL FUNCTION BYOT_SSN(plaintext VARCHAR, custom_token VAR
 -- Table Names (maps to vaults):
 -- - name: NAME vault
 -- - id: ID vault
--- - dob: DOB vault
+-- - dob: DOB vault (year-preserving)
 -- - ssn: SSN vault
--- - month_day: DOB_PRESERVE_YYYY vault
+-- - email: EMAIL vault
 --
 -- Limitations (per Skyflow Query API):
 -- - Maximum 25 records per query (use LIMIT/OFFSET for pagination)
@@ -296,6 +314,7 @@ GRANT USAGE ON FUNCTION DETOK_ID(VARCHAR) TO ROLE YOUR_APPLICATION_ROLE;
 GRANT USAGE ON FUNCTION DETOK_DOB(VARCHAR) TO ROLE YOUR_APPLICATION_ROLE;
 GRANT USAGE ON FUNCTION DETOK_SSN(VARCHAR) TO ROLE YOUR_APPLICATION_ROLE;
 GRANT USAGE ON FUNCTION DETOK_SSN_PARTIAL(VARCHAR) TO ROLE YOUR_APPLICATION_ROLE;
+GRANT USAGE ON FUNCTION DETOK_EMAIL(VARCHAR) TO ROLE YOUR_APPLICATION_ROLE;
 
 -- Tokenization functions
 GRANT USAGE ON FUNCTION TOK_NAME(VARCHAR) TO ROLE YOUR_APPLICATION_ROLE;
@@ -303,6 +322,7 @@ GRANT USAGE ON FUNCTION TOK_ID(VARCHAR) TO ROLE YOUR_APPLICATION_ROLE;
 GRANT USAGE ON FUNCTION TOK_DOB(VARCHAR) TO ROLE YOUR_APPLICATION_ROLE;
 GRANT USAGE ON FUNCTION TOK_SSN(VARCHAR) TO ROLE YOUR_APPLICATION_ROLE;
 GRANT USAGE ON FUNCTION TOK_SSN_PARTIAL(VARCHAR) TO ROLE YOUR_APPLICATION_ROLE;
+GRANT USAGE ON FUNCTION TOK_EMAIL(VARCHAR) TO ROLE YOUR_APPLICATION_ROLE;
 
 -- One-way tokenization functions
 GRANT USAGE ON FUNCTION TOK_ONEWAY_NAME(VARCHAR) TO ROLE YOUR_APPLICATION_ROLE;
@@ -328,6 +348,7 @@ SELECT TOK_NAME('John Doe');
 SELECT TOK_ID('12345');
 SELECT TOK_DOB('1990-01-01'); -- Returns format with preserved year (e.g., "1990-11-18")
 SELECT TOK_SSN('123-45-6789');
+SELECT TOK_EMAIL('user@example.com'); -- Skyflow automatically preserves domain (e.g., "abc123def@example.com")
 
 -- Test one-way tokenization (WARNING: Records will be DELETED)
 SELECT TOK_ONEWAY_NAME('Jane Smith');
@@ -340,6 +361,7 @@ SELECT DETOK_NAME('tok_abc123_your_token_here');
 SELECT DETOK_ID('tok_def456_your_token_here');
 SELECT DETOK_DOB('1990-11-18'); -- Returns original date "1990-01-01"
 SELECT DETOK_SSN('tok_jkl012_your_token_here');
+SELECT DETOK_EMAIL('abc123def@example.com'); -- Returns "user@example.com"
 
 -- WARNING: Detokenization of one-way tokens will FAIL (records deleted)
 -- SELECT DETOK_NAME('tok_oneway_token_here'); -- This will error: record not found
@@ -358,13 +380,15 @@ SELECT DETOK_DOB('1990-05-16');                 -- Returns '1990-01-01'
 SELECT
     id,
     TOK_NAME(name) as name_token,
-    TOK_SSN(ssn) as ssn_token
+    TOK_SSN(ssn) as ssn_token,
+    TOK_EMAIL(email) as email_token
 FROM YOUR_TABLE
 LIMIT 5;
 
 -- Test round-trip (tokenize then detokenize)
 SELECT DETOK_NAME(TOK_NAME('John Doe')) as should_be_john_doe;
-SELECT DETOK_DOB_PRESERVE_YYYY(TOK_DOB_PRESERVE_YYYY('1984-04-25')) as should_be_1984_04_25;
+SELECT DETOK_DOB(TOK_DOB('1984-04-25')) as should_be_1984_04_25;
+SELECT DETOK_EMAIL(TOK_EMAIL('user@example.com')) as should_be_user_at_example;
 
 -- Test SKYFLOW_QUERY function (privacy-preserving analytics)
 -- Note: These examples assume vault data exists
@@ -397,16 +421,31 @@ FROM TABLE(FLATTEN(
     SKYFLOW_QUERY('SELECT name, skyflow_id FROM name WHERE name ILIKE ''%JOHN%'' LIMIT 25')
 ));
 
+-- Query emails from specific domain
+SELECT
+    value:email::VARCHAR as email_value,
+    value:skyflow_id::VARCHAR as vault_id
+FROM TABLE(FLATTEN(
+    SKYFLOW_QUERY('SELECT email, skyflow_id FROM email WHERE email ILIKE ''%@example.com'' LIMIT 25')
+));
+
 -- Query with pagination
 SELECT value FROM TABLE(FLATTEN(SKYFLOW_QUERY('SELECT * FROM ssn LIMIT 25 OFFSET 0')));  -- First page
 SELECT value FROM TABLE(FLATTEN(SKYFLOW_QUERY('SELECT * FROM ssn LIMIT 25 OFFSET 25'))); -- Second page
 
--- Test year-specific mapping requirement
+-- Test year-specific mapping requirement for DOB (year preserved, month-day tokenized)
 SELECT
-    TOK_DOB_PRESERVE_YYYY('1984-04-25') as token_1984,
-    TOK_DOB_PRESERVE_YYYY('1985-04-25') as token_1985;
--- These should produce different tokenized MM-DD values
+    TOK_DOB('1984-04-25') as token_1984,
+    TOK_DOB('1985-04-25') as token_1985;
+-- These should produce different tokenized MM-DD values with year preserved
 -- e.g., "1984-09-12" vs "1985-10-04"
+
+-- Test domain-specific uniqueness for EMAIL (Skyflow guarantees different tokens)
+SELECT
+    TOK_EMAIL('john.doe@example.com') as token_example,
+    TOK_EMAIL('john.doe@gmail.com') as token_gmail;
+-- Skyflow ensures different prefixes for same local part at different domains
+-- e.g., "abc123@example.com" vs "xyz789@gmail.com"
 
 -- ============================================================================
 -- Verify Function Creation
@@ -431,7 +470,7 @@ SHOW FUNCTIONS LIKE 'SKYFLOW_QUERY%';
 --
 -- Headers sent to Lambda (Snowflake prepends 'sf-custom-' and 'sf-context-' prefixes):
 -- - sf-custom-x-operation: tokenize | detokenize | tokenize_oneway
--- - sf-custom-x-data-type: NAME | ID | DOB | SSN | DOB_PRESERVE_YYYY
+-- - sf-custom-x-data-type: NAME | ID | DOB | SSN | EMAIL
 -- - sf-context-current-user: <calling Snowflake user>
 -- - sf-context-current-role: <calling Snowflake role>
 -- - sf-context-current-account: <Snowflake account identifier>
@@ -461,33 +500,21 @@ SHOW FUNCTIONS LIKE 'SKYFLOW_QUERY%';
 -- - NOT idempotent: Same value tokenized multiple times returns different tokens
 --   (because record is deleted after each tokenization)
 --
--- DOB_PRESERVE_YYYY (Format-Preserving Date Tokenization):
--- - Special implementation for year-preserving date tokenization
--- - Input: "1984-04-25" (YYYY-MM-DD format)
--- - Output: "1984-11-18" (year preserved, MM-DD tokenized to valid date)
--- - Year-specific mapping: Same MM-DD in different years gets different tokens
---   Example: "1984-04-25" → "1984-09-12" vs "1985-04-25" → "1985-10-04"
--- - Skyflow vault schema (month_day table):
---   * dob_full: Original date (plaintext) - "1984-04-25"
---   * dob_year: Extracted year (plaintext, queryable) - "1984"
---   * month_day_token: Tokenized MM-DD (plaintext, queryable) - "09-12"
--- - Tokenization flow (2 API calls):
---   1. Insert dob_full with FPT enabled to get format-preserving token
---   2. Extract month_day_token from FPT result and upsert back to record
--- - Detokenization flow (1 API call):
---   1. Parse FPT token to extract year and month_day_token
---   2. Query Skyflow: WHERE month_day_token='09-12' AND dob_year='1984'
---   3. Return original dob_full value
--- - Skyflow query capability: SELECT * FROM month_day WHERE dob_year = '1984'
+-- EMAIL (Domain-Preserving Email Tokenization):
+-- - Uses Skyflow's built-in email tokenization with automatic domain preservation
+-- - Input: "john.doe@example.com"
+-- - Output: "abc123def@example.com" (domain preserved, prefix tokenized by Skyflow)
+-- - Skyflow automatically ensures same prefix at different domains gets different tokens
+-- - Example: "john.doe@example.com" → "abc123@example.com" vs "john.doe@gmail.com" → "xyz789@gmail.com"
 --
 -- Query Operation (Privacy-Preserving Analytics):
 -- - Generic SKYFLOW_QUERY(sql) function executes SQL directly against vault data
 -- - Lambda routes queries to appropriate vaults based on table names in SQL:
 --   * name → NAME vault
 --   * id → ID vault
---   * dob → DOB vault
+--   * dob → DOB vault (year-preserving)
 --   * ssn → SSN vault
---   * month_day → DOB_PRESERVE_YYYY vault
+--   * email → EMAIL vault
 -- - Enables filtering, aggregation, and JOINs without bringing sensitive data to Snowflake
 -- - Returns JSON array of results (use TABLE(FLATTEN(...)) to parse in Snowflake)
 -- - Queries run on encrypted data using Skyflow's polymorphic encryption

@@ -58,6 +58,17 @@
           "minLength": 3,
           "stripPunctuation": false
         }
+      },
+      {
+        "vaultId": "YOUR_VAULT_ID_FOR_EMAILS",
+        "table": "email",
+        "column": "email",
+        "dataType": "EMAIL",
+        "transformations": {
+          "uppercase": false,
+          "minLength": 5,
+          "stripPunctuation": false
+        }
       }
     ]
   },

@@ -59,9 +59,8 @@ Before starting, gather these values:
 - **Authentication credentials** (choose one):
   - **JWT (Service Account)**: Client ID, private key, token URI, key ID (recommended)
   - **API Key**: Bearer token
-- Vault IDs for each data type (NAME, ID, DOB, SSN, DOB_PRESERVE_YYYY)
+- Vault IDs for each data type (NAME, ID, DOB, SSN, EMAIL)
 - Table and column names for each data type
-- For DOB_PRESERVE_YYYY: Additional column names (dob_full, dob_year, month_day_token)
 
 **From AWS:**
 - AWS Account ID
@@ -182,13 +181,14 @@ Create `skyflow-config.json` with your Skyflow credentials. You can use either *
         }
       },
       {
-        "vaultId": "YOUR_VAULT_ID_FOR_DOB_PRESERVE_YYYY",
+        "vaultId": "YOUR_VAULT_ID_FOR_EMAILS",
         "table": "persons",
-        "dataType": "DOB_PRESERVE_YYYY",
-        "columns": {
-          "dob_full": "date_of_birth",
-          "dob_year": "dob_year",
-          "month_day_token": "month_day_token"
+        "column": "email",
+        "dataType": "EMAIL",
+        "transformations": {
+          "uppercase": false,
+          "minLength": 5,
+          "stripPunctuation": false
         }
       }
     ]
@@ -259,13 +259,14 @@ Create `skyflow-config.json` with your Skyflow credentials. You can use either *
         }
       },
       {
-        "vaultId": "YOUR_VAULT_ID_FOR_DOB_PRESERVE_YYYY",
+        "vaultId": "YOUR_VAULT_ID_FOR_EMAILS",
         "table": "persons",
-        "dataType": "DOB_PRESERVE_YYYY",
-        "columns": {
-          "dob_full": "date_of_birth",
-          "dob_year": "dob_year",
-          "month_day_token": "month_day_token"
+        "column": "email",
+        "dataType": "EMAIL",
+        "transformations": {
+          "uppercase": false,
+          "minLength": 5,
+          "stripPunctuation": false
         }
       }
     ]
@@ -764,10 +765,10 @@ CREATE OR REPLACE EXTERNAL FUNCTION TOK_SSN(plaintext VARCHAR)
     CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
-CREATE OR REPLACE EXTERNAL FUNCTION TOK_DOB_PRESERVE_YYYY(plaintext VARCHAR)
+CREATE OR REPLACE EXTERNAL FUNCTION TOK_EMAIL(plaintext VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    HEADERS = ('X-Operation' = 'tokenize', 'X-Data-Type' = 'DOB_PRESERVE_YYYY')
+    HEADERS = ('X-Operation' = 'tokenize', 'X-Data-Type' = 'EMAIL')
     CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
@@ -800,10 +801,10 @@ CREATE OR REPLACE EXTERNAL FUNCTION DETOK_SSN(token VARCHAR)
     CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
-CREATE OR REPLACE EXTERNAL FUNCTION DETOK_DOB_PRESERVE_YYYY(token VARCHAR)
+CREATE OR REPLACE EXTERNAL FUNCTION DETOK_EMAIL(token VARCHAR)
     RETURNS VARCHAR
     API_INTEGRATION = skyflow_api_integration
-    HEADERS = ('X-Operation' = 'detokenize', 'X-Data-Type' = 'DOB_PRESERVE_YYYY')
+    HEADERS = ('X-Operation' = 'detokenize', 'X-Data-Type' = 'EMAIL')
     CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
@@ -858,7 +859,7 @@ SELECT
     TOK_ID('12345') as id_token,
     TOK_DOB('1990-01-01') as dob_token,
     TOK_SSN('123-45-6789') as ssn_token,
-    TOK_DOB_PRESERVE_YYYY('1984-04-25') as dob_preserve_yyyy_token;
+    TOK_EMAIL('user@example.com') as email_token;
 
 -- Test batch processing
 SELECT
@@ -964,8 +965,8 @@ The Lambda function supports data transformations that are applied before tokeni
 | **NAME**  | ✅ Yes     | ✅ Yes             | 3 chars    | None       |
 | **ID**    | ✅ Yes     | ✅ Yes             | 3 chars    | None       |
 | **DOB**   | ❌ No      | ✅ Yes             | None       | Date range: 0600-01-01 to 3337-11-27 |
-| **DOB_PRESERVE_YYYY** | ❌ No | ❌ No | None | Date format: YYYY-MM-DD (bypasses preprocessing, preserves year) |
 | **SSN**   | ❌ No      | ✅ Yes             | 3 chars    | None       |
+| **EMAIL** | ❌ No      | ❌ No              | 5 chars    | None (Skyflow preserves domain automatically) |
 
 **How Transformations Work:**
 
@@ -995,7 +996,7 @@ The Lambda function supports data transformations that are applied before tokeni
 4. Apply uppercase (if enabled)
 5. Tokenize processed value
 
-**Note:** DOB_PRESERVE_YYYY bypasses all preprocessing steps above. It only validates the date format (YYYY-MM-DD) and does not apply any transformations.
+**Note:** DOB tokenization is year-preserving by default - the year remains visible in plaintext in the token (e.g., "1984-04-25" → "1984-11-18").
 
 ### Performance Settings
 
@@ -1246,12 +1247,12 @@ DROP FUNCTION IF EXISTS TOK_NAME(VARCHAR);
 DROP FUNCTION IF EXISTS TOK_ID(VARCHAR);
 DROP FUNCTION IF EXISTS TOK_DOB(VARCHAR);
 DROP FUNCTION IF EXISTS TOK_SSN(VARCHAR);
-DROP FUNCTION IF EXISTS TOK_DOB_PRESERVE_YYYY(VARCHAR);
+DROP FUNCTION IF EXISTS TOK_EMAIL(VARCHAR);
 DROP FUNCTION IF EXISTS DETOK_NAME(VARCHAR);
 DROP FUNCTION IF EXISTS DETOK_ID(VARCHAR);
 DROP FUNCTION IF EXISTS DETOK_DOB(VARCHAR);
 DROP FUNCTION IF EXISTS DETOK_SSN(VARCHAR);
-DROP FUNCTION IF EXISTS DETOK_DOB_PRESERVE_YYYY(VARCHAR);
+DROP FUNCTION IF EXISTS DETOK_EMAIL(VARCHAR);
 DROP API INTEGRATION IF EXISTS skyflow_api_integration;
 ```
 
@@ -1330,7 +1331,7 @@ Create a file `env-vars.json` with your settings:
   "SKYFLOW_PRIVATE_KEY": "-----BEGIN PRIVATE KEY-----\\nYOUR_KEY_HERE\\n-----END PRIVATE KEY-----\\n",
   "SKYFLOW_KEY_ALGORITHM": "KEY_ALG_RSA_2048",
   "SKYFLOW_VAULT_URL": "https://YOUR_CLUSTER_ID.vault.skyflowapis.com",
-  "SKYFLOW_VAULT_DEFINITIONS": "[{\"vaultId\":\"vault1\",\"table\":\"persons\",\"column\":\"name\",\"dataType\":\"NAME\",\"transformations\":{\"uppercase\":true,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault2\",\"table\":\"persons\",\"column\":\"person_id\",\"dataType\":\"ID\",\"transformations\":{\"uppercase\":true,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault3\",\"table\":\"persons\",\"column\":\"date_of_birth\",\"dataType\":\"DOB\",\"transformations\":{\"uppercase\":false,\"stripPunctuation\":true,\"validation\":{\"minDate\":\"0600-01-01\",\"maxDate\":\"3337-11-27\"}}},{\"vaultId\":\"vault4\",\"table\":\"persons\",\"column\":\"ssn\",\"dataType\":\"SSN\",\"transformations\":{\"uppercase\":false,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault5\",\"table\":\"persons\",\"dataType\":\"DOB_PRESERVE_YYYY\",\"columns\":{\"dob_full\":\"date_of_birth\",\"dob_year\":\"dob_year\",\"month_day_token\":\"month_day_token\"}}]",
+  "SKYFLOW_VAULT_DEFINITIONS": "[{\"vaultId\":\"vault1\",\"table\":\"persons\",\"column\":\"name\",\"dataType\":\"NAME\",\"transformations\":{\"uppercase\":true,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault2\",\"table\":\"persons\",\"column\":\"person_id\",\"dataType\":\"ID\",\"transformations\":{\"uppercase\":true,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault3\",\"table\":\"persons\",\"column\":\"date_of_birth\",\"dataType\":\"DOB\",\"transformations\":{\"uppercase\":false,\"stripPunctuation\":true,\"validation\":{\"minDate\":\"0600-01-01\",\"maxDate\":\"3337-11-27\"}}},{\"vaultId\":\"vault4\",\"table\":\"persons\",\"column\":\"ssn\",\"dataType\":\"SSN\",\"transformations\":{\"uppercase\":false,\"minLength\":3,\"stripPunctuation\":true}},{\"vaultId\":\"vault5\",\"table\":\"persons\",\"column\":\"email\",\"dataType\":\"EMAIL\",\"transformations\":{\"uppercase\":false,\"minLength\":5,\"stripPunctuation\":false}}]",
   "SKYFLOW_TOKENIZE_BATCH_SIZE": "5",
   "SKYFLOW_TOKENIZE_MAX_CONCURRENCY": "400",
   "SKYFLOW_DETOKENIZE_BATCH_SIZE": "100",
