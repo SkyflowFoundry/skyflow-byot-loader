@@ -17,22 +17,17 @@ let secretsManagerClient = null;
  * @returns {Promise<Object>} Configuration object
  */
 async function loadConfig() {
-    console.log('Loading configuration...');
 
     // Try Secrets Manager first (if configured, this is the ONLY source)
     if (process.env.SECRETS_MANAGER_SECRET_NAME) {
-        console.log('Loading from AWS Secrets Manager:', process.env.SECRETS_MANAGER_SECRET_NAME);
-        console.log('IMPORTANT: Secrets Manager is configured - ignoring credentials.json and environment variables');
         return await loadFromSecretsManager();
     }
 
     // Load from SKYFLOW_* environment variables
-    console.log('Loading from SKYFLOW_* environment variables');
 
     // Reconstruct credentials object (JWT first, then API Key)
     let credentials;
     if (process.env.SKYFLOW_CLIENT_ID) {
-        console.log('Using JWT (Service Account) authentication from environment variables');
         credentials = {
             clientID: process.env.SKYFLOW_CLIENT_ID,
             clientName: process.env.SKYFLOW_CLIENT_NAME,
@@ -42,7 +37,6 @@ async function loadConfig() {
             keyAlgorithm: process.env.SKYFLOW_KEY_ALGORITHM
         };
     } else if (process.env.SKYFLOW_API_KEY) {
-        console.log('Using API Key authentication from environment variables');
         credentials = {
             apiKey: process.env.SKYFLOW_API_KEY
         };
@@ -69,7 +63,6 @@ async function loadConfig() {
         logLevel: process.env.SKYFLOW_LOG_LEVEL || 'INFO'
     };
 
-    console.log('Successfully loaded config from environment variables');
     return normalizeConfig(config);
 }
 
@@ -91,7 +84,6 @@ async function loadFromSecretsManager() {
             region,
             maxAttempts: 3
         });
-        console.log('Initialized singleton Secrets Manager client');
     }
 
     const maxRetries = 3;
@@ -104,7 +96,6 @@ async function loadFromSecretsManager() {
             const data = await secretsManagerClient.send(command);
             const config = JSON.parse(data.SecretString);
 
-            console.log('Configuration loaded from Secrets Manager', {
                 attempt,
                 hasVaultUrl: !!(config.vaults?.vaultUrl || config.vault_url),
                 hasBearerToken: !!config.bearer_token,
@@ -134,7 +125,6 @@ async function loadFromSecretsManager() {
 
             // Exponential backoff with jitter
             const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 100;
-            console.log(`Retrying in ${Math.round(delay)}ms...`);
             await new Promise(resolve => setTimeout(resolve, delay));
         }
     }
@@ -152,7 +142,6 @@ function normalizeConfig(config) {
     const isOldFormat = config.vault_url || config.bearer_token || config.data_type_mappings;
 
     if (isOldFormat) {
-        console.log('Detected old configuration format - auto-converting to SDK format');
         config = convertOldToNewFormat(config);
     }
 
@@ -168,7 +157,6 @@ function normalizeConfig(config) {
         throw new Error('Credentials must have either service account fields (clientID, privateKey) or apiKey');
     }
 
-    console.log('Credentials type:', hasServiceAccount ? 'Service Account (JWT)' : 'API Key');
 
     // Validate vaults structure (new format only)
     if (!config.vaults) {
@@ -196,7 +184,6 @@ function normalizeConfig(config) {
         throw new Error(`Invalid vaultUrl format: ${vaultUrl}. Expected format: https://<clusterId>.vault.skyflowapis.com`);
     }
     const clusterId = clusterIdMatch[1];
-    console.log('Extracted clusterId from vaultUrl:', clusterId);
 
     // Validate vault definitions
     if (vaultDefinitions.length === 0) {
@@ -284,7 +271,6 @@ function normalizeConfig(config) {
         throw new Error('deleteMaxConcurrency must be a positive number');
     }
 
-    console.log('Configuration validated successfully', {
         vaultCount: config.vaults.length,
         dataTypes: Object.keys(config.vaultsByDataType),
         logLevel: config.logLevel,
@@ -312,7 +298,6 @@ function normalizeConfig(config) {
  * @returns {Object} New format configuration
  */
 function convertOldToNewFormat(oldConfig) {
-    console.log('Converting old config format to SDK format...', {
         hasBearerToken: !!oldConfig.bearer_token,
         bearerTokenValue: oldConfig.bearer_token ? oldConfig.bearer_token.substring(0, 10) + '...' : 'MISSING'
     });
@@ -322,7 +307,6 @@ function convertOldToNewFormat(oldConfig) {
     if (!vaultUrl) {
         throw new Error('vault_url is required in old configuration format');
     }
-    console.log('Using vaultUrl from old config:', vaultUrl);
 
     // Convert credentials - support both bearer_token and bearerToken
     const bearerToken = oldConfig.bearer_token || oldConfig.bearerToken;
@@ -337,7 +321,6 @@ function convertOldToNewFormat(oldConfig) {
         apiKey: bearerToken
     };
 
-    console.log('Credentials converted', {
         hasApiKey: !!credentials.apiKey,
         apiKeyPrefix: credentials.apiKey ? credentials.apiKey.substring(0, 10) + '...' : 'MISSING'
     });
@@ -375,7 +358,6 @@ function convertOldToNewFormat(oldConfig) {
         deleteMaxConcurrency: oldConfig.delete_max_concurrency || oldConfig.deleteMaxConcurrency || 100
     };
 
-    console.log('Old config converted successfully', {
         oldFields: Object.keys(oldConfig),
         newVaultCount: vaultDefinitions.length,
         hasCredentials: !!newConfig.credentials,

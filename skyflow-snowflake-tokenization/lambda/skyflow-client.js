@@ -45,7 +45,6 @@ class SkyflowClient {
         // Lazy initialization: SDK clients created on-demand per data type
         this.skyflowClients = {};
 
-        console.log('SkyflowClient initialized (lazy loading)', {
             vaultCount: config.vaults.length,
             dataTypes: Object.keys(this.vaultsByDataType),
             logLevel: config.logLevel,
@@ -106,7 +105,6 @@ class SkyflowClient {
             logLevel: this.logLevelMap[this.config.logLevel] || LogLevel.INFO
         };
 
-        console.log(`Initializing Skyflow SDK for ${vault.dataType}`, {
             vaultId: vault.vaultId,
             clusterId: vault.clusterId,
             credentialType: this.config.credentials.apiKey ? 'API Key' : 'Service Account'
@@ -250,7 +248,6 @@ class SkyflowClient {
             groupedByDataType[dataType].push(item);
         }
 
-        console.log(`Tokenizing ${values.length} values across ${Object.keys(groupedByDataType).length} data types`);
 
         // Process each data type group SEQUENTIALLY (with parallelization within each)
         const allResults = [];
@@ -261,7 +258,6 @@ class SkyflowClient {
 
         // No need to sort - results are already in order from sequential processing
 
-        console.log(`Tokenization complete: ${allResults.length} results`);
         return allResults;
     }
 
@@ -285,7 +281,6 @@ class SkyflowClient {
             groupedByDataType[dataType].push(item);
         }
 
-        console.log(`Detokenizing ${tokens.length} tokens across ${Object.keys(groupedByDataType).length} data types`);
 
         // Process each data type group SEQUENTIALLY (with parallelization within each)
         const allResults = [];
@@ -296,7 +291,6 @@ class SkyflowClient {
 
         // No need to sort - results are already in order from sequential processing
 
-        console.log(`Detokenization complete: ${allResults.length} results`);
         return allResults;
     }
 
@@ -510,7 +504,6 @@ class SkyflowClient {
             const response = await client.vault(vaultId).insert(insertRequest, insertOptions);
             const elapsed = Date.now() - startTime;
 
-            console.log(`SDK insert completed in ${elapsed}ms for ${dataType}`);
 
             // Parse SDK response for processed values
             const processedResults = this._parseInsertResponse(valuesToProcess, response, column);
@@ -715,7 +708,6 @@ class SkyflowClient {
             const response = await client.vault(vaultId).detokenize(detokenizeRequest, detokenizeOptions);
             const elapsed = Date.now() - startTime;
 
-            console.log(`SDK detokenize completed in ${elapsed}ms for ${dataType}`);
 
             // Parse SDK response
             return this._parseDetokenizeResponse(tokens, response);
@@ -782,7 +774,6 @@ class SkyflowClient {
         const successCount = results.filter(r => !r.error).length;
         const errorCount = results.filter(r => r.error).length;
         if (errorCount > 0) {
-            console.log(`Insert response parsed: ${successCount} successful, ${errorCount} errors`);
         }
 
         return results;
@@ -844,7 +835,6 @@ class SkyflowClient {
 
         for (const group of deleteGroups) {
             const { vaultId, table, dataType, records } = group;
-            console.log(`Deleting ${records.length} records from ${table} (vault: ${vaultId})`);
 
             const client = this._getOrInitializeClient(dataType);
 
@@ -875,14 +865,12 @@ class SkyflowClient {
         try {
             const skyflowIds = records.map(r => r.skyflowId);
 
-            console.log(`Deleting batch of ${skyflowIds.length} records from ${table}`);
             const startTime = Date.now();
 
             const deleteRequest = new DeleteRequest(table, skyflowIds);
             const response = await client.vault(vaultId).delete(deleteRequest);
 
             const elapsed = Date.now() - startTime;
-            console.log(`Delete batch completed in ${elapsed}ms`);
 
             // Parse SDK response
             const deletedIds = response.deletedIds || [];
@@ -940,7 +928,6 @@ class SkyflowClient {
             return [];
         }
 
-        console.log(`Starting one-way tokenization for ${values.length} values`);
 
         // Step 1: Tokenize normally (captures skyflowIds in results)
         // Pass isOneway=true to automatically use <table>_oneway and <column>_oneway
@@ -950,11 +937,9 @@ class SkyflowClient {
         const successfulTokenizations = tokenizeResults.filter(r => !r.error && r.skyflowId);
 
         if (successfulTokenizations.length === 0) {
-            console.log('No successful tokenizations to delete');
             return tokenizeResults;
         }
 
-        console.log(`Tokenization complete: ${successfulTokenizations.length} records to delete`);
 
         // Step 3: Group by vaultId + table + dataType for batch deletion
         const deleteGroups = this._groupForDeletion(successfulTokenizations, values);
@@ -1006,7 +991,6 @@ class SkyflowClient {
 
         const successCount = finalResults.filter(r => !r.error).length;
         const errorCount = finalResults.filter(r => r.error).length;
-        console.log(`One-way tokenization complete: ${successCount} success, ${errorCount} errors`);
 
         return finalResults;
     }
@@ -1056,7 +1040,6 @@ class SkyflowClient {
             return [];
         }
 
-        console.log(`Starting BYOT insertion for ${values.length} values`);
 
         const groups = {};
         for (const item of values) {
@@ -1115,7 +1098,6 @@ class SkyflowClient {
             insertOptions.setTokens(tokens);
             insertOptions.setContinueOnError(false);
 
-            console.log(`BYOT inserting ${values.length} values for ${dataType}`);
             const response = await client.vault(vaultId).insert(insertRequest, insertOptions);
 
             const insertedFields = response.insertedFields || [];
@@ -1232,7 +1214,6 @@ class SkyflowClient {
                 insertOptions.setUpsertColumn(columns.dob_full);
                 insertOptions.setContinueOnError(false);
 
-                console.log(`BYOT DOB: ${dobFull} with token ${customToken}`);
                 await client.vault(vaultId).insert(insertRequest, insertOptions);
 
                 const finalToken = `${dobYear}-${tokenizedMonthDay}`;
@@ -1243,7 +1224,6 @@ class SkyflowClient {
                     error: null
                 });
 
-                console.log(`BYOT DOB complete for row ${item.rowIndex}: ${finalToken}`);
 
             } catch (error) {
                 console.error(`BYOT DOB failed for row ${item.rowIndex}:`, error.message);
@@ -1270,7 +1250,6 @@ class SkyflowClient {
             return [];
         }
 
-        console.log(`Starting partial tokenization for ${values.length} values`);
 
         const groups = {};
         for (const value of values) {
@@ -1360,7 +1339,6 @@ class SkyflowClient {
                 insertOptions1.setUpsertColumn(columns.dob_full);
                 insertOptions1.setContinueOnError(false);
 
-                console.log(`DOB Partial Call 1: Inserting ${dobFull} to get FPT token`);
                 const response1 = await client.vault(vaultId).insert(insertRequest1, insertOptions1);
 
                 const insertedFields1 = response1.insertedFields || [];
@@ -1374,10 +1352,8 @@ class SkyflowClient {
                 }
 
                 const fptToken = insertedFields1[0][columns.dob_full];
-                console.log(`DOB Partial FPT token received: ${fptToken}`);
 
                 const tokenizedMonthDay = fptToken.substring(5);
-                console.log(`DOB Partial Extracted tokenized month-day: ${tokenizedMonthDay}`);
 
                 const insertData2 = [{
                     [columns.dob_year]: dobYear,
@@ -1391,13 +1367,10 @@ class SkyflowClient {
                 insertOptions2.setUpsertColumn(columns.dob_full);
                 insertOptions2.setContinueOnError(false);
 
-                console.log(`DOB Partial Call 2: Upserting with month_day_token=${tokenizedMonthDay}`);
                 await client.vault(vaultId).insert(insertRequest2, insertOptions2);
 
-                console.log(`DOB Partial Call 2 completed successfully`);
 
                 const finalToken = `${dobYear}-${tokenizedMonthDay}`;
-                console.log(`DOB Partial Final token (year preserved): ${finalToken}`);
 
                 results.push({
                     rowIndex: item.rowIndex,
@@ -1405,7 +1378,6 @@ class SkyflowClient {
                     error: null
                 });
 
-                console.log(`DOB Partial tokenization complete for row ${item.rowIndex}: ${finalToken}`);
 
             } catch (error) {
                 console.error(`DOB Partial tokenization failed for row ${item.rowIndex}:`, error.message);
@@ -1478,7 +1450,6 @@ class SkyflowClient {
                 insertOptions1.setUpsertColumn(columns.ssn_full);
                 insertOptions1.setContinueOnError(false);
 
-                console.log(`SSN Partial Call 1: Inserting ${ssnFull} to get FPT token`);
                 const response1 = await client.vault(vaultId).insert(insertRequest1, insertOptions1);
 
                 const insertedFields1 = response1.insertedFields || [];
@@ -1492,10 +1463,8 @@ class SkyflowClient {
                 }
 
                 const fptToken = insertedFields1[0][columns.ssn_full];
-                console.log(`SSN Partial FPT token received: ${fptToken}`);
 
                 const tokenizedFirst5 = fptToken.substring(0, 6);
-                console.log(`SSN Partial Extracted tokenized first5: ${tokenizedFirst5}`);
 
                 const insertData2 = [{
                     [columns.ssn_last4]: ssnLast4,
@@ -1509,13 +1478,10 @@ class SkyflowClient {
                 insertOptions2.setUpsertColumn(columns.ssn_full);
                 insertOptions2.setContinueOnError(false);
 
-                console.log(`SSN Partial Call 2: Upserting with ssn_first5_token=${tokenizedFirst5}`);
                 await client.vault(vaultId).insert(insertRequest2, insertOptions2);
 
-                console.log(`SSN Partial Call 2 completed successfully`);
 
                 const finalToken = `${tokenizedFirst5}-${ssnLast4}`;
-                console.log(`SSN Partial Final token (last 4 preserved): ${finalToken}`);
 
                 results.push({
                     rowIndex: item.rowIndex,
@@ -1523,7 +1489,6 @@ class SkyflowClient {
                     error: null
                 });
 
-                console.log(`SSN Partial tokenization complete for row ${item.rowIndex}: ${finalToken}`);
 
             } catch (error) {
                 console.error(`SSN Partial tokenization failed for row ${item.rowIndex}:`, error.message);
@@ -1550,7 +1515,6 @@ class SkyflowClient {
             return [];
         }
 
-        console.log(`Starting partial detokenization for ${tokens.length} tokens`);
 
         const groups = {};
         for (const token of tokens) {
@@ -1626,7 +1590,6 @@ class SkyflowClient {
                 const query = `SELECT dob_full FROM ${table} WHERE month_day_token = '${monthDayToken}'`;
                 const queryRequest = new QueryRequest(query);
 
-                console.log(`DOB Partial detokenization query: ${query}`);
                 const response = await client.vault(vaultId).query(queryRequest);
 
                 const fields = response.fields || [];
@@ -1646,7 +1609,6 @@ class SkyflowClient {
                     error: null
                 });
 
-                console.log(`DOB Partial detokenization successful: ${partialToken} -> ${dobFull}`);
 
             } catch (error) {
                 console.error(`DOB Partial detokenization failed for ${item.token}:`, error.message);
@@ -1706,7 +1668,6 @@ class SkyflowClient {
                 const query = `SELECT ssn_full FROM ${table} WHERE ssn_first5_token = '${first5Token}' AND ssn_last4 = '${last4}'`;
                 const queryRequest = new QueryRequest(query);
 
-                console.log(`SSN Partial detokenization query: ${query}`);
                 const response = await client.vault(vaultId).query(queryRequest);
 
                 const fields = response.fields || [];
@@ -1726,7 +1687,6 @@ class SkyflowClient {
                     error: null
                 });
 
-                console.log(`SSN Partial detokenization successful: ${partialToken} -> ${ssnFull}`);
 
             } catch (error) {
                 console.error(`SSN Partial detokenization failed for ${item.token}:`, error.message);
@@ -1753,7 +1713,6 @@ class SkyflowClient {
             return [];
         }
 
-        console.log(`Executing ${queries.length} vault queries`);
 
         const allResults = [];
 
@@ -1782,7 +1741,6 @@ class SkyflowClient {
             }
         }
 
-        console.log(`Query batch complete: ${allResults.length} results`);
         return allResults;
     }
 
@@ -1793,7 +1751,6 @@ class SkyflowClient {
      * @returns {Promise<Object>} Query response from Skyflow SDK
      */
     async _executeQuery(sqlQuery) {
-        console.log(`Executing query: ${sqlQuery}`);
 
         // Parse table name from SQL
         const tableName = this._extractTableName(sqlQuery);
@@ -1813,13 +1770,11 @@ class SkyflowClient {
         const client = this._getOrInitializeClient(dataType);
         const { vaultId } = vault;
 
-        console.log(`Routing query to ${dataType} vault (${vaultId})`);
 
         // Execute query using Skyflow SDK
         const queryRequest = new QueryRequest(sqlQuery);
         const response = await client.vault(vaultId).query(queryRequest);
 
-        console.log(`Query returned ${response.fields?.length || 0} records`);
 
         return response;
     }
@@ -1863,7 +1818,6 @@ class SkyflowClient {
      * Clean up resources (if needed)
      */
     destroy() {
-        console.log('SkyflowClient destroyed');
     }
 }
 
