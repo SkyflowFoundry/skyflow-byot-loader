@@ -13,7 +13,7 @@ let skyflowClient = null;
 let config = null;
 let configLoadTime = null;
 let configLoadPromise = null; // Prevents concurrent config loads
-const CONFIG_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CONFIG_CACHE_TTL_MS = 60 * 60 * 1000; // 60 minutes (matches JWT token lifetime)
 
 /**
  * Initialize Skyflow client with configuration
@@ -317,13 +317,13 @@ function extractDataType(event) {
 }
 
 /**
- * Extract Snowflake caller context from CONTEXT_HEADERS
+ * Extract Snowflake caller context from all sf-* headers
  *
- * Snowflake prepends 'sf-context-' to context function names when creating HTTP headers.
+ * Captures both sf-context-* and sf-custom-* headers from Snowflake.
  * See: https://docs.snowflake.com/en/sql-reference/sql/create-external-function
  *
  * @param {Object} event - Lambda event
- * @returns {Object} Caller context {user, role, account, ipAddress}
+ * @returns {Object} Caller context with all sf-* headers
  */
 function extractCallerContext(event) {
     // Convert all header keys to lowercase for case-insensitive lookup
@@ -333,12 +333,44 @@ function extractCallerContext(event) {
         return acc;
     }, {});
 
-    return {
+    // Start with known context fields
+    const context = {
         user: lowerHeaders['sf-context-current-user'] || 'UNKNOWN',
         role: lowerHeaders['sf-context-current-role'] || 'UNKNOWN',
         account: lowerHeaders['sf-context-current-account'] || 'UNKNOWN',
         ipAddress: lowerHeaders['sf-context-current-ip-address'] || 'UNKNOWN'
     };
+
+    // Extract all sf-context-* headers (beyond the known ones)
+    Object.keys(lowerHeaders).forEach(key => {
+        if (key.startsWith('sf-context-')) {
+            // Skip known fields (already added above)
+            if (key !== 'sf-context-current-user' &&
+                key !== 'sf-context-current-role' &&
+                key !== 'sf-context-current-account' &&
+                key !== 'sf-context-current-ip-address') {
+                // Convert sf-context-foo-bar to fooBar
+                const fieldName = key
+                    .replace('sf-context-', '')
+                    .replace(/-./g, match => match.charAt(1).toUpperCase());
+                context[fieldName] = lowerHeaders[key];
+            }
+        }
+    });
+
+    // Extract all sf-custom-* headers
+    Object.keys(lowerHeaders).forEach(key => {
+        if (key.startsWith('sf-custom-')) {
+            // Convert sf-custom-foo-bar to customFooBar
+            const fieldName = 'custom' + key
+                .replace('sf-custom-', '')
+                .replace(/-./g, match => match.charAt(1).toUpperCase())
+                .replace(/^./, match => match.toUpperCase());
+            context[fieldName] = lowerHeaders[key];
+        }
+    });
+
+    return context;
 }
 
 /**
@@ -372,8 +404,9 @@ async function handler(event, context) {
             };
         }
 
-        // Get Skyflow client instance
+        // Get Skyflow client instance and set caller context
         const client = await getSkyflowClient();
+        client.setCallerContext(caller);
 
         // Route to appropriate operation
         if (operation === 'tokenize') {

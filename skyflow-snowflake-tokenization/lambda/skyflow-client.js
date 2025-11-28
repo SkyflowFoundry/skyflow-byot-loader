@@ -42,77 +42,117 @@ class SkyflowClient {
         };
         this.logLevelMap = logLevelMap;
 
-        // Lazy initialization: SDK clients created on-demand per data type
-        this.skyflowClients = {};
+        // Caller context for audit trails (set per request)
+        this.callerContext = null;
 
-            vaultCount: config.vaults.length,
-            dataTypes: Object.keys(this.vaultsByDataType),
-            logLevel: config.logLevel,
-            tokenize: {
-                batchSize: this.TOKENIZE_BATCH_SIZE,
-                maxConcurrency: this.TOKENIZE_MAX_CONCURRENCY
-            },
-            detokenize: {
-                batchSize: this.DETOKENIZE_BATCH_SIZE,
-                maxConcurrency: this.DETOKENIZE_MAX_CONCURRENCY
-            },
-            delete: {
-                batchSize: this.DELETE_BATCH_SIZE,
-                maxConcurrency: this.DELETE_MAX_CONCURRENCY
-            }
-        });
+        // Single SDK instance with context tracking
+        this.skyflowClient = null;
+        this.lastContextKey = null;
     }
 
     /**
-     * Get or lazily initialize Skyflow SDK client for a specific data type
-     * @param {string} dataType - Data type (NAME, ID, DOB, SSN)
+     * Set caller context for the current request
+     * This must be called before any tokenize/detokenize operations
+     * @param {Object} callerContext - Snowflake caller context {user, role, account, ipAddress, ...}
+     */
+    setCallerContext(callerContext) {
+        this.callerContext = callerContext;
+    }
+
+    /**
+     * Get or lazily initialize Skyflow SDK client with caller context
+     * Creates a single SDK instance with all vaults, cached per user:role context
      * @returns {Skyflow} Skyflow SDK client instance
      * @private
      */
-    _getOrInitializeClient(dataType) {
-        // Return cached client if already initialized
-        if (this.skyflowClients[dataType]) {
-            return this.skyflowClients[dataType];
+    _getOrInitializeClient() {
+        if (!this.callerContext) {
+            throw new Error('Caller context not set. Call setCallerContext() before using client methods.');
         }
 
-        // Find vault configuration for this data type
-        const vault = this.config.vaults.find(v => v.dataType === dataType);
-        if (!vault) {
-            throw new Error(`No vault configuration found for data type: ${dataType}`);
+        // Build context key from user, role, and IP address
+        // IP included to allow immediate context refresh for demo/testing scenarios
+        const contextKey = `${this.callerContext.user}:${this.callerContext.role}:${this.callerContext.ipAddress}`;
+
+        // Return cached client if context hasn't changed
+        if (this.skyflowClient && this.lastContextKey === contextKey) {
+            return this.skyflowClient;
         }
 
-        // SDK expects credentials wrapped in specific format
-        // For service account: { credentialsString: JSON.stringify(serviceAccountObject) }
-        // For API key: { apiKey: 'key' }
-        let credentials;
-        if (this.config.credentials.apiKey) {
-            // API key format
-            credentials = { apiKey: this.config.credentials.apiKey };
-        } else {
-            // Service account format - SDK needs credentialsString
-            credentials = { credentialsString: JSON.stringify(this.config.credentials) };
-        }
+        // Context changed or no client exists - create new SDK with all vaults
+        const credentials = this._buildCredentials();
 
-        const vaultConfig = {
+        // Build vault configs for ALL vaults with credentials inside each vault config
+        // Per Skyflow SDK v2.x, credentials must be inside vaultConfig, not at top level
+        const vaultConfigs = this.config.vaults.map(vault => ({
             vaultId: vault.vaultId,
             clusterId: vault.clusterId,
             env: 'PROD',
             credentials: credentials
-        };
+        }));
 
         const skyflowConfig = {
-            vaultConfigs: [vaultConfig],
+            vaultConfigs: vaultConfigs,
             logLevel: this.logLevelMap[this.config.logLevel] || LogLevel.INFO
         };
 
-            vaultId: vault.vaultId,
-            clusterId: vault.clusterId,
-            credentialType: this.config.credentials.apiKey ? 'API Key' : 'Service Account'
+        // Initialize and cache the client
+        this.skyflowClient = new Skyflow(skyflowConfig);
+        this.lastContextKey = contextKey;
+
+        return this.skyflowClient;
+    }
+
+    /**
+     * Build credentials object with optional context
+     * Uses this.callerContext set by setCallerContext()
+     * @returns {Object} Credentials object for Skyflow SDK
+     * @private
+     */
+    _buildCredentials() {
+        if (this.config.credentials.apiKey) {
+            // API Key auth - no context support
+            return { apiKey: this.config.credentials.apiKey };
+        }
+
+        // JWT auth with context (SDK v2.0.2 supports context as object)
+        // Validate JWT credentials exist
+        const jwtFields = ['clientID', 'keyID', 'tokenURI', 'privateKey'];
+        const missingFields = jwtFields.filter(field => !this.config.credentials[field]);
+
+        if (missingFields.length > 0) {
+            console.error(`[Credentials] MISSING JWT FIELDS:`, missingFields);
+            console.error(`[Credentials] Available credential fields:`, Object.keys(this.config.credentials));
+        }
+
+        // Start with base context fields
+        const context = {
+            snowflakeUser: this.callerContext.user,
+            snowflakeRole: this.callerContext.role,
+            snowflakeAccount: this.callerContext.account,
+            snowflakeIpAddress: this.callerContext.ipAddress,
+            source: 'snowflake-external-function',
+            lambdaFunction: process.env.AWS_LAMBDA_FUNCTION_NAME || 'skyflow-tokenization'
+        };
+
+        // Add all additional sf-* fields from callerContext
+        // Filter out Base64-encoded duplicates (Snowflake sends both regular and Base64 versions)
+        Object.keys(this.callerContext).forEach(key => {
+            // Skip the known fields (already added above)
+            if (key !== 'user' && key !== 'role' && key !== 'account' && key !== 'ipAddress') {
+                // Skip Base64-encoded versions (e.g., currentClientBase64, currentDatabaseBase64)
+                if (!key.endsWith('Base64')) {
+                    context[key] = this.callerContext[key];
+                }
+            }
         });
 
-        // Initialize and cache the client
-        this.skyflowClients[dataType] = new Skyflow(skyflowConfig);
-        return this.skyflowClients[dataType];
+        // SDK v2.x format: { credentialsString: "...", context: {...} }
+        // credentialsString must be the raw service account JSON as a string
+        return {
+            credentialsString: JSON.stringify(this.config.credentials),
+            context: context
+        };
     }
 
 
@@ -344,7 +384,7 @@ class SkyflowClient {
         }
 
         // Step 2: Tokenize only unique transformed values (in batches)
-        const client = this._getOrInitializeClient(dataType);
+        const client = this._getOrInitializeClient();
         // If oneway, automatically append _oneway to table and column
         const table = isOneway ? `${vault.table}_oneway` : vault.table;
         const column = isOneway ? `${vault.column}_oneway` : vault.column;
@@ -529,6 +569,8 @@ class SkyflowClient {
     /**
      * Detokenize a group of tokens for a specific data type
      * @private
+     * @param {string} dataType - Data type
+     * @param {Array} tokens - Tokens to detokenize
      */
     async _detokenizeDataTypeGroup(dataType, tokens) {
         const vault = this.vaultsByDataType[dataType];
@@ -585,7 +627,7 @@ class SkyflowClient {
         }
 
         // Step 5: Detokenize only unique tokens to process, in batches
-        const client = this._getOrInitializeClient(dataType);
+        const client = this._getOrInitializeClient();
         const { vaultId } = vault;
         const processedResults = [];
 
@@ -836,7 +878,7 @@ class SkyflowClient {
         for (const group of deleteGroups) {
             const { vaultId, table, dataType, records } = group;
 
-            const client = this._getOrInitializeClient(dataType);
+            const client = this._getOrInitializeClient();
 
             // Batch delete in chunks
             const chunks = [];
@@ -1083,7 +1125,7 @@ class SkyflowClient {
             }));
         }
 
-        const client = this._getOrInitializeClient(dataType);
+        const client = this._getOrInitializeClient();
         const { vaultId, table, column } = vault;
         const results = [];
 
@@ -1158,7 +1200,7 @@ class SkyflowClient {
             }));
         }
 
-        const client = this._getOrInitializeClient('DOB');
+        const client = this._getOrInitializeClient();
         const { vaultId } = vault;
         const table = 'dob_partial_token';
 
@@ -1301,7 +1343,7 @@ class SkyflowClient {
             }));
         }
 
-        const client = this._getOrInitializeClient('DOB');
+        const client = this._getOrInitializeClient();
         const { vaultId } = vault;
         const table = 'dob_partial_token';
 
@@ -1412,7 +1454,7 @@ class SkyflowClient {
             }));
         }
 
-        const client = this._getOrInitializeClient('SSN');
+        const client = this._getOrInitializeClient();
         const { vaultId } = vault;
         const table = 'ssn_partial_token';
 
@@ -1566,7 +1608,7 @@ class SkyflowClient {
             }));
         }
 
-        const client = this._getOrInitializeClient('DOB');
+        const client = this._getOrInitializeClient();
         const { vaultId } = vault;
         const table = 'dob_partial_token';
 
@@ -1643,7 +1685,7 @@ class SkyflowClient {
             }));
         }
 
-        const client = this._getOrInitializeClient('SSN');
+        const client = this._getOrInitializeClient();
         const { vaultId } = vault;
         const table = 'ssn_partial_token';
 
@@ -1767,7 +1809,7 @@ class SkyflowClient {
         }
 
         // Get or initialize SDK client for this vault
-        const client = this._getOrInitializeClient(dataType);
+        const client = this._getOrInitializeClient();
         const { vaultId } = vault;
 
 

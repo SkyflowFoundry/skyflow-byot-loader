@@ -17,7 +17,6 @@ let secretsManagerClient = null;
  * @returns {Promise<Object>} Configuration object
  */
 async function loadConfig() {
-
     // Try Secrets Manager first (if configured, this is the ONLY source)
     if (process.env.SECRETS_MANAGER_SECRET_NAME) {
         return await loadFromSecretsManager();
@@ -95,15 +94,6 @@ async function loadFromSecretsManager() {
 
             const data = await secretsManagerClient.send(command);
             const config = JSON.parse(data.SecretString);
-
-                attempt,
-                hasVaultUrl: !!(config.vaults?.vaultUrl || config.vault_url),
-                hasBearerToken: !!config.bearer_token,
-                hasDataTypeMappings: !!config.data_type_mappings,
-                hasCredentials: !!config.credentials,
-                hasVaults: !!config.vaults,
-                vaultsIsObject: typeof config.vaults === 'object' && !Array.isArray(config.vaults)
-            });
 
             return normalizeConfig(config);
         } catch (error) {
@@ -271,23 +261,6 @@ function normalizeConfig(config) {
         throw new Error('deleteMaxConcurrency must be a positive number');
     }
 
-        vaultCount: config.vaults.length,
-        dataTypes: Object.keys(config.vaultsByDataType),
-        logLevel: config.logLevel,
-        tokenize: {
-            batchSize: config.tokenizeBatchSize,
-            maxConcurrency: config.tokenizeMaxConcurrency
-        },
-        detokenize: {
-            batchSize: config.detokenizeBatchSize,
-            maxConcurrency: config.detokenizeMaxConcurrency
-        },
-        delete: {
-            batchSize: config.deleteBatchSize,
-            maxConcurrency: config.deleteMaxConcurrency
-        }
-    });
-
     return config;
 }
 
@@ -298,10 +271,6 @@ function normalizeConfig(config) {
  * @returns {Object} New format configuration
  */
 function convertOldToNewFormat(oldConfig) {
-        hasBearerToken: !!oldConfig.bearer_token,
-        bearerTokenValue: oldConfig.bearer_token ? oldConfig.bearer_token.substring(0, 10) + '...' : 'MISSING'
-    });
-
     // Extract vaultUrl from old vault_url field
     let vaultUrl = oldConfig.vault_url;
     if (!vaultUrl) {
@@ -320,10 +289,6 @@ function convertOldToNewFormat(oldConfig) {
     const credentials = {
         apiKey: bearerToken
     };
-
-        hasApiKey: !!credentials.apiKey,
-        apiKeyPrefix: credentials.apiKey ? credentials.apiKey.substring(0, 10) + '...' : 'MISSING'
-    });
 
     // Convert data_type_mappings to vaults definitions (without clusterId - will be extracted from vaultUrl)
     const vaultDefinitions = [];
@@ -357,14 +322,6 @@ function convertOldToNewFormat(oldConfig) {
         deleteBatchSize: oldConfig.delete_batch_size || oldConfig.deleteBatchSize || 25,
         deleteMaxConcurrency: oldConfig.delete_max_concurrency || oldConfig.deleteMaxConcurrency || 100
     };
-
-        oldFields: Object.keys(oldConfig),
-        newVaultCount: vaultDefinitions.length,
-        hasCredentials: !!newConfig.credentials,
-        hasApiKey: !!newConfig.credentials.apiKey,
-        vaultUrl: newConfig.vaults.vaultUrl,
-        ignoredFields: ['max_concurrency', 'max_retries', 'retry_delay_ms'].filter(f => oldConfig[f])
-    });
 
     return newConfig;
 }

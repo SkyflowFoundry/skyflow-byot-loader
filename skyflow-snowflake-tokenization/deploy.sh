@@ -1713,3 +1713,332 @@ case "${1}" in
         exit 1
         ;;
 esac
+
+# ============================================================================
+# Example curl Commands for Direct Lambda Testing
+# ============================================================================
+# These examples show how to test the Lambda function directly via API Gateway
+# Replace API_URL with your actual API Gateway URL from deployment-info.txt
+#
+# Export your API URL first:
+# export API_URL=$(grep "URL:" deployment-info.txt | awk '{print $2}')
+#
+# ============================================================================
+#
+# 1. TOKENIZATION (TOK_NAME)
+# --------------------------
+# Tokenize a name with Snowflake context headers
+#
+# curl -X POST "$API_URL" \
+#   -H "Content-Type: application/json" \
+#   -H "sf-custom-x-operation: tokenize" \
+#   -H "sf-custom-x-data-type: NAME" \
+#   -H "sf-context-current-user: TESTUSER" \
+#   -H "sf-context-current-role: ANALYST" \
+#   -H "sf-context-current-account: ABC123" \
+#   -H "sf-context-current-ip-address: 192.168.1.1" \
+#   -d '{
+#     "data": [
+#       [0, "John Doe"],
+#       [1, "Jane Smith"],
+#       [2, "Bob Johnson"]
+#     ]
+#   }'
+#
+# Expected response:
+# {
+#   "data": [
+#     [0, "tok_abc123..."],
+#     [1, "tok_def456..."],
+#     [2, "tok_ghi789..."]
+#   ]
+# }
+#
+# ============================================================================
+#
+# 2. DETOKENIZATION (DETOK_NAME)
+# -------------------------------
+# Detokenize name tokens back to original values
+#
+# curl -X POST "$API_URL" \
+#   -H "Content-Type: application/json" \
+#   -H "sf-custom-x-operation: detokenize" \
+#   -H "sf-custom-x-data-type: NAME" \
+#   -H "sf-context-current-user: TESTUSER" \
+#   -H "sf-context-current-role: ANALYST" \
+#   -H "sf-context-current-account: ABC123" \
+#   -H "sf-context-current-ip-address: 192.168.1.1" \
+#   -d '{
+#     "data": [
+#       [0, "tok_abc123..."],
+#       [1, "tok_def456..."]
+#     ]
+#   }'
+#
+# Expected response:
+# {
+#   "data": [
+#     [0, "John Doe"],
+#     [1, "Jane Smith"]
+#   ]
+# }
+#
+# ============================================================================
+#
+# 3. ONE-WAY TOKENIZATION (TOK_ONEWAY_NAME)
+# ------------------------------------------
+# Tokenize and immediately delete the vault record (irreversible)
+#
+# curl -X POST "$API_URL" \
+#   -H "Content-Type: application/json" \
+#   -H "sf-custom-x-operation: tokenize_oneway" \
+#   -H "sf-custom-x-data-type: NAME" \
+#   -H "sf-context-current-user: TESTUSER" \
+#   -H "sf-context-current-role: ANALYST" \
+#   -H "sf-context-current-account: ABC123" \
+#   -H "sf-context-current-ip-address: 192.168.1.1" \
+#   -d '{
+#     "data": [
+#       [0, "Sensitive Name 1"],
+#       [1, "Sensitive Name 2"]
+#     ]
+#   }'
+#
+# Note: One-way tokens cannot be detokenized (vault record deleted after tokenization)
+#
+# ============================================================================
+#
+# 4. PARTIAL TOKENIZATION - SSN (TOK_SSN_PARTIAL)
+# ------------------------------------------------
+# Tokenize SSN with last 4 digits preserved in plaintext
+#
+# curl -X POST "$API_URL" \
+#   -H "Content-Type: application/json" \
+#   -H "sf-custom-x-operation: tokenize_partial" \
+#   -H "sf-custom-x-data-type: SSN" \
+#   -H "sf-context-current-user: TESTUSER" \
+#   -H "sf-context-current-role: ANALYST" \
+#   -H "sf-context-current-account: ABC123" \
+#   -H "sf-context-current-ip-address: 192.168.1.1" \
+#   -d '{
+#     "data": [
+#       [0, "123-45-6789"],
+#       [1, "987-65-4321"]
+#     ]
+#   }'
+#
+# Expected response (first 5 digits tokenized, last 4 preserved):
+# {
+#   "data": [
+#     [0, "abc12-6789"],
+#     [1, "def98-4321"]
+#   ]
+# }
+#
+# ============================================================================
+#
+# 5. PARTIAL TOKENIZATION - DOB (TOK_DOB_PARTIAL)
+# ------------------------------------------------
+# Tokenize date of birth with year preserved in plaintext
+#
+# curl -X POST "$API_URL" \
+#   -H "Content-Type: application/json" \
+#   -H "sf-custom-x-operation: tokenize_partial" \
+#   -H "sf-custom-x-data-type: DOB" \
+#   -H "sf-context-current-user: TESTUSER" \
+#   -H "sf-context-current-role: ANALYST" \
+#   -H "sf-context-current-account: ABC123" \
+#   -H "sf-context-current-ip-address: 192.168.1.1" \
+#   -d '{
+#     "data": [
+#       [0, "1985-04-15"],
+#       [1, "1990-12-31"]
+#     ]
+#   }'
+#
+# Expected response (year preserved, month-day tokenized):
+# {
+#   "data": [
+#     [0, "1985-xyz123"],
+#     [1, "1990-abc789"]
+#   ]
+# }
+#
+# ============================================================================
+#
+# 6. DETOKENIZE PARTIAL - SSN (DETOK_SSN_PARTIAL)
+# ------------------------------------------------
+# Detokenize partial SSN token back to full SSN
+#
+# curl -X POST "$API_URL" \
+#   -H "Content-Type: application/json" \
+#   -H "sf-custom-x-operation: detokenize_partial" \
+#   -H "sf-custom-x-data-type: SSN" \
+#   -H "sf-context-current-user: TESTUSER" \
+#   -H "sf-context-current-role: ANALYST" \
+#   -H "sf-context-current-account: ABC123" \
+#   -H "sf-context-current-ip-address: 192.168.1.1" \
+#   -d '{
+#     "data": [
+#       [0, "abc12-6789"],
+#       [1, "def98-4321"]
+#     ]
+#   }'
+#
+# Expected response:
+# {
+#   "data": [
+#     [0, "123-45-6789"],
+#     [1, "987-65-4321"]
+#   ]
+# }
+#
+# ============================================================================
+#
+# 7. BYOT (Bring Your Own Token) - NAME
+# --------------------------------------
+# Insert with custom token values instead of Skyflow-generated tokens
+#
+# curl -X POST "$API_URL" \
+#   -H "Content-Type: application/json" \
+#   -H "sf-custom-x-operation: byot" \
+#   -H "sf-custom-x-data-type: NAME" \
+#   -H "sf-context-current-user: TESTUSER" \
+#   -H "sf-context-current-role: ANALYST" \
+#   -H "sf-context-current-account: ABC123" \
+#   -H "sf-context-current-ip-address: 192.168.1.1" \
+#   -d '{
+#     "data": [
+#       [0, "John Doe", "my-custom-token-123"],
+#       [1, "Jane Smith", "my-custom-token-456"]
+#     ]
+#   }'
+#
+# Note: BYOT requires 3 fields: [rowIndex, value, customToken]
+#
+# ============================================================================
+#
+# 8. VAULT QUERY (SKYFLOW_QUERY)
+# -------------------------------
+# Execute SQL queries directly against Skyflow vaults for analytics
+#
+# curl -X POST "$API_URL" \
+#   -H "Content-Type: application/json" \
+#   -H "sf-custom-x-operation: query" \
+#   -H "sf-context-current-user: TESTUSER" \
+#   -H "sf-context-current-role: ANALYST" \
+#   -H "sf-context-current-account: ABC123" \
+#   -H "sf-context-current-ip-address: 192.168.1.1" \
+#   -d '{
+#     "data": [
+#       [0, "SELECT COUNT(*) as total FROM name WHERE name LIKE '\''%John%'\''"],
+#       [1, "SELECT skyflow_id FROM ssn LIMIT 5"]
+#     ]
+#   }'
+#
+# Expected response (query results as arrays):
+# {
+#   "data": [
+#     [0, [{"total": 42}]],
+#     [1, [{"skyflow_id": "abc123"}, {"skyflow_id": "def456"}, ...]]
+#   ]
+# }
+#
+# ============================================================================
+#
+# 9. TESTING WITH CUSTOM HEADERS
+# -------------------------------
+# Add custom headers to track additional context (all sf-custom-* headers passed to Skyflow)
+#
+# curl -X POST "$API_URL" \
+#   -H "Content-Type: application/json" \
+#   -H "sf-custom-x-operation: tokenize" \
+#   -H "sf-custom-x-data-type: NAME" \
+#   -H "sf-custom-x-request-id: req-12345" \
+#   -H "sf-custom-x-tenant-id: tenant-abc" \
+#   -H "sf-custom-x-application: MyApp" \
+#   -H "sf-context-current-user: TESTUSER" \
+#   -H "sf-context-current-role: ANALYST" \
+#   -H "sf-context-current-account: ABC123" \
+#   -H "sf-context-current-ip-address: 192.168.1.1" \
+#   -H "sf-context-current-database: PROD_DB" \
+#   -H "sf-context-current-warehouse: COMPUTE_WH" \
+#   -d '{
+#     "data": [
+#       [0, "Test User"]
+#     ]
+#   }'
+#
+# All sf-custom-* and sf-context-* headers will appear in Skyflow audit logs
+#
+# ============================================================================
+#
+# 10. BATCH TESTING (Multiple Records)
+# -------------------------------------
+# Test with larger batches to verify performance
+#
+# curl -X POST "$API_URL" \
+#   -H "Content-Type: application/json" \
+#   -H "sf-custom-x-operation: tokenize" \
+#   -H "sf-custom-x-data-type: NAME" \
+#   -H "sf-context-current-user: TESTUSER" \
+#   -H "sf-context-current-role: ANALYST" \
+#   -H "sf-context-current-account: ABC123" \
+#   -H "sf-context-current-ip-address: 192.168.1.1" \
+#   -d '{
+#     "data": [
+#       [0, "Name 1"], [1, "Name 2"], [2, "Name 3"], [3, "Name 4"], [4, "Name 5"],
+#       [5, "Name 6"], [6, "Name 7"], [7, "Name 8"], [8, "Name 9"], [9, "Name 10"],
+#       [10, "Name 11"], [11, "Name 12"], [12, "Name 13"], [13, "Name 14"], [14, "Name 15"]
+#     ]
+#   }'
+#
+# ============================================================================
+#
+# USEFUL TESTING PATTERNS:
+#
+# 1. Test with jq for pretty output:
+#    curl -X POST "$API_URL" ... | jq '.'
+#
+# 2. Save token for detokenization test:
+#    TOKEN=$(curl -X POST "$API_URL" ... | jq -r '.data[0][1]')
+#    echo "Token: $TOKEN"
+#
+# 3. Full round-trip test (tokenize then detokenize):
+#    TOKEN=$(curl -s -X POST "$API_URL" \
+#      -H "Content-Type: application/json" \
+#      -H "sf-custom-x-operation: tokenize" \
+#      -H "sf-custom-x-data-type: NAME" \
+#      -H "sf-context-current-user: TESTUSER" \
+#      -H "sf-context-current-role: ANALYST" \
+#      -H "sf-context-current-account: ABC123" \
+#      -H "sf-context-current-ip-address: 192.168.1.1" \
+#      -d '{"data": [[0, "John Doe"]]}' | jq -r '.data[0][1]')
+#
+#    echo "Generated token: $TOKEN"
+#
+#    curl -s -X POST "$API_URL" \
+#      -H "Content-Type: application/json" \
+#      -H "sf-custom-x-operation: detokenize" \
+#      -H "sf-custom-x-data-type: NAME" \
+#      -H "sf-context-current-user: TESTUSER" \
+#      -H "sf-context-current-role: ANALYST" \
+#      -H "sf-context-current-account: ABC123" \
+#      -H "sf-context-current-ip-address: 192.168.1.1" \
+#      -d "{\"data\": [[0, \"$TOKEN\"]]}" | jq '.'
+#
+# 4. Test error handling (invalid data type):
+#    curl -X POST "$API_URL" \
+#      -H "Content-Type: application/json" \
+#      -H "sf-custom-x-operation: tokenize" \
+#      -H "sf-custom-x-data-type: INVALID_TYPE" \
+#      -H "sf-context-current-user: TESTUSER" \
+#      -H "sf-context-current-role: ANALYST" \
+#      -H "sf-context-current-account: ABC123" \
+#      -H "sf-context-current-ip-address: 192.168.1.1" \
+#      -d '{"data": [[0, "test"]]}'
+#
+# 5. Monitor Lambda logs while testing:
+#    aws logs tail /aws/lambda/skyflow-tokenization --follow --region us-east-1
+#
+# ============================================================================
