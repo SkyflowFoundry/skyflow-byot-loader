@@ -13,7 +13,7 @@ let skyflowClient = null;
 let config = null;
 let configLoadTime = null;
 let configLoadPromise = null; // Prevents concurrent config loads
-const CONFIG_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CONFIG_CACHE_TTL_MS = 60 * 60 * 1000; // 60 minutes (matches JWT token lifetime)
 
 /**
  * Initialize Skyflow client with configuration
@@ -37,17 +37,9 @@ async function getSkyflowClient() {
         if (!configLoadPromise) {
             configLoadPromise = (async () => {
                 try {
-                    if (configExpired) {
-                        console.log('Config cache expired, reloading from Secrets Manager');
-                    }
-
                     config = await loadConfig();
                     configLoadTime = Date.now();
                     skyflowClient = new SkyflowClient(config);
-                    console.log('Initialized SkyflowClient', {
-                        cacheExpired: configExpired,
-                        loadTime: new Date(configLoadTime).toISOString()
-                    });
                     return skyflowClient;
                 } finally {
                     // Clear promise to allow future reloads
@@ -96,7 +88,6 @@ function parseDetokenizeRequest(event, dataType) {
         };
     });
 
-    console.log(`Parsed ${tokens.length} tokens from Snowflake detokenize request for ${dataType}`);
     return tokens;
 }
 
@@ -136,7 +127,6 @@ function parseTokenizeRequest(event, dataType) {
         };
     });
 
-    console.log(`Parsed ${values.length} values from Snowflake tokenize request for ${dataType}`);
     return values;
 }
 
@@ -177,7 +167,6 @@ function parseBYOTRequest(event, dataType) {
         };
     });
 
-    console.log(`Parsed ${values.length} values from Snowflake BYOT request for ${dataType}`);
     return values;
 }
 
@@ -247,7 +236,6 @@ function parseQueryRequest(event) {
         };
     });
 
-    console.log(`Parsed ${queries.length} SQL queries from Snowflake query request`);
     return queries;
 }
 
@@ -329,13 +317,13 @@ function extractDataType(event) {
 }
 
 /**
- * Extract Snowflake caller context from CONTEXT_HEADERS
+ * Extract Snowflake caller context from all sf-* headers
  *
- * Snowflake prepends 'sf-context-' to context function names when creating HTTP headers.
+ * Captures both sf-context-* and sf-custom-* headers from Snowflake.
  * See: https://docs.snowflake.com/en/sql-reference/sql/create-external-function
  *
  * @param {Object} event - Lambda event
- * @returns {Object} Caller context {user, role, account, ipAddress}
+ * @returns {Object} Caller context with all sf-* headers
  */
 function extractCallerContext(event) {
     // Convert all header keys to lowercase for case-insensitive lookup
@@ -345,12 +333,44 @@ function extractCallerContext(event) {
         return acc;
     }, {});
 
-    return {
+    // Start with known context fields
+    const context = {
         user: lowerHeaders['sf-context-current-user'] || 'UNKNOWN',
         role: lowerHeaders['sf-context-current-role'] || 'UNKNOWN',
         account: lowerHeaders['sf-context-current-account'] || 'UNKNOWN',
         ipAddress: lowerHeaders['sf-context-current-ip-address'] || 'UNKNOWN'
     };
+
+    // Extract all sf-context-* headers (beyond the known ones)
+    Object.keys(lowerHeaders).forEach(key => {
+        if (key.startsWith('sf-context-')) {
+            // Skip known fields (already added above)
+            if (key !== 'sf-context-current-user' &&
+                key !== 'sf-context-current-role' &&
+                key !== 'sf-context-current-account' &&
+                key !== 'sf-context-current-ip-address') {
+                // Convert sf-context-foo-bar to fooBar
+                const fieldName = key
+                    .replace('sf-context-', '')
+                    .replace(/-./g, match => match.charAt(1).toUpperCase());
+                context[fieldName] = lowerHeaders[key];
+            }
+        }
+    });
+
+    // Extract all sf-custom-* headers
+    Object.keys(lowerHeaders).forEach(key => {
+        if (key.startsWith('sf-custom-')) {
+            // Convert sf-custom-foo-bar to customFooBar
+            const fieldName = 'custom' + key
+                .replace('sf-custom-', '')
+                .replace(/-./g, match => match.charAt(1).toUpperCase())
+                .replace(/^./, match => match.toUpperCase());
+            context[fieldName] = lowerHeaders[key];
+        }
+    });
+
+    return context;
 }
 
 /**
@@ -361,37 +381,20 @@ function extractCallerContext(event) {
  * @returns {Promise<Object>} API Gateway response
  */
 async function handler(event, context) {
-    console.log('Lambda invoked', {
-        requestId: context.requestId,
-        functionName: context.functionName,
-        remainingTimeMs: context.getRemainingTimeInMillis()
-    });
-
     try {
         // Extract operation and data type from headers
         const operation = extractOperation(event);
         const dataType = operation === 'query' ? null : extractDataType(event);
         const caller = extractCallerContext(event);
 
-        console.log(`Operation: ${operation}${dataType ? `, Data Type: ${dataType}` : ''}`, {
-            caller: {
-                user: caller.user,
-                role: caller.role,
-                account: caller.account,
-                ipAddress: caller.ipAddress
-            }
-        });
-
         // Parse request body (API Gateway format)
         let requestData = event;
         if (event.body && typeof event.body === 'string') {
-            console.log('Parsing JSON body from API Gateway');
             requestData = JSON.parse(event.body);
         }
 
         // Handle empty data
         if (!requestData.data || requestData.data.length === 0) {
-            console.log('No data to process');
             return {
                 statusCode: 200,
                 headers: {
@@ -401,30 +404,15 @@ async function handler(event, context) {
             };
         }
 
-        // Get Skyflow client instance
+        // Get Skyflow client instance and set caller context
         const client = await getSkyflowClient();
+        client.setCallerContext(caller);
 
         // Route to appropriate operation
         if (operation === 'tokenize') {
             // Tokenization
             const values = parseTokenizeRequest(requestData, dataType);
-
-            console.log(`Starting tokenization of ${values.length} values for ${dataType}`);
-            const startTime = Date.now();
-
             const results = await client.tokenizeBatch(values);
-
-            const elapsed = Date.now() - startTime;
-            const successCount = results.filter(r => !r.error).length;
-            const errorCount = results.filter(r => r.error).length;
-
-            console.log(`Tokenization complete in ${elapsed}ms`, {
-                totalValues: values.length,
-                successCount,
-                errorCount,
-                throughput: Math.round(values.length / (elapsed / 1000))
-            });
-
             const response = formatTokenizeResponse(results);
 
             return {
@@ -437,23 +425,7 @@ async function handler(event, context) {
 
         } else if (operation === 'tokenize_oneway') {
             const values = parseTokenizeRequest(requestData, dataType);
-
-            console.log(`Starting one-way tokenization of ${values.length} values for ${dataType}`);
-            const startTime = Date.now();
-
             const results = await client.tokenizeOneWayBatch(values);
-
-            const elapsed = Date.now() - startTime;
-            const successCount = results.filter(r => !r.error).length;
-            const errorCount = results.filter(r => r.error).length;
-
-            console.log(`One-way tokenization complete in ${elapsed}ms`, {
-                totalValues: values.length,
-                successCount,
-                errorCount,
-                throughput: Math.round(values.length / (elapsed / 1000))
-            });
-
             const response = formatTokenizeResponse(results);
 
             return {
@@ -466,23 +438,7 @@ async function handler(event, context) {
 
         } else if (operation === 'tokenize_partial') {
             const values = parseTokenizeRequest(requestData, dataType);
-
-            console.log(`Starting partial tokenization of ${values.length} values for ${dataType}`);
-            const startTime = Date.now();
-
             const results = await client.tokenizePartialBatch(values);
-
-            const elapsed = Date.now() - startTime;
-            const successCount = results.filter(r => !r.error).length;
-            const errorCount = results.filter(r => r.error).length;
-
-            console.log(`Partial tokenization complete in ${elapsed}ms`, {
-                totalValues: values.length,
-                successCount,
-                errorCount,
-                throughput: Math.round(values.length / (elapsed / 1000))
-            });
-
             const response = formatTokenizeResponse(results);
 
             return {
@@ -495,23 +451,7 @@ async function handler(event, context) {
 
         } else if (operation === 'detokenize_partial') {
             const tokens = parseDetokenizeRequest(requestData, dataType);
-
-            console.log(`Starting partial detokenization of ${tokens.length} tokens for ${dataType}`);
-            const startTime = Date.now();
-
             const results = await client.detokenizePartialBatch(tokens);
-
-            const elapsed = Date.now() - startTime;
-            const successCount = results.filter(r => !r.error).length;
-            const errorCount = results.filter(r => r.error).length;
-
-            console.log(`Partial detokenization complete in ${elapsed}ms`, {
-                totalTokens: tokens.length,
-                successCount,
-                errorCount,
-                throughput: Math.round(tokens.length / (elapsed / 1000))
-            });
-
             const response = formatDetokenizeResponse(results);
 
             return {
@@ -525,23 +465,7 @@ async function handler(event, context) {
         } else if (operation === 'byot') {
             // BYOT (Bring Your Own Token)
             const values = parseBYOTRequest(requestData, dataType);
-
-            console.log(`Starting BYOT insertion of ${values.length} values for ${dataType}`);
-            const startTime = Date.now();
-
             const results = await client.byotBatch(values);
-
-            const elapsed = Date.now() - startTime;
-            const successCount = results.filter(r => !r.error).length;
-            const errorCount = results.filter(r => r.error).length;
-
-            console.log(`BYOT complete in ${elapsed}ms`, {
-                totalValues: values.length,
-                successCount,
-                errorCount,
-                throughput: Math.round(values.length / (elapsed / 1000))
-            });
-
             const response = formatTokenizeResponse(results);
 
             return {
@@ -555,23 +479,7 @@ async function handler(event, context) {
         } else if (operation === 'query') {
             // Query operation
             const queries = parseQueryRequest(requestData);
-
-            console.log(`Starting vault query execution for ${queries.length} queries`);
-            const startTime = Date.now();
-
             const results = await client.executeQueryBatch(queries);
-
-            const elapsed = Date.now() - startTime;
-            const successCount = results.filter(r => !r.error).length;
-            const errorCount = results.filter(r => r.error).length;
-
-            console.log(`Query execution complete in ${elapsed}ms`, {
-                totalQueries: queries.length,
-                successCount,
-                errorCount,
-                throughput: Math.round(queries.length / (elapsed / 1000))
-            });
-
             const response = formatQueryResponse(results);
 
             return {
@@ -585,23 +493,7 @@ async function handler(event, context) {
         } else {
             // Detokenization
             const tokens = parseDetokenizeRequest(requestData, dataType);
-
-            console.log(`Starting detokenization of ${tokens.length} tokens`);
-            const startTime = Date.now();
-
             const results = await client.detokenizeBatch(tokens);
-
-            const elapsed = Date.now() - startTime;
-            const successCount = results.filter(r => !r.error).length;
-            const errorCount = results.filter(r => r.error).length;
-
-            console.log(`Detokenization complete in ${elapsed}ms`, {
-                totalTokens: tokens.length,
-                successCount,
-                errorCount,
-                throughput: Math.round(tokens.length / (elapsed / 1000))
-            });
-
             const response = formatDetokenizeResponse(results);
 
             return {

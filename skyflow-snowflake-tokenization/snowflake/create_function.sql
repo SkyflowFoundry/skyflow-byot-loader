@@ -32,7 +32,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION DETOK_NAME(token VARCHAR)
         'X-Operation' = 'detokenize',
         'X-Data-Type' = 'NAME'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_ID(token VARCHAR)
@@ -42,7 +64,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION DETOK_ID(token VARCHAR)
         'X-Operation' = 'detokenize',
         'X-Data-Type' = 'ID'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_DOB(token VARCHAR)
@@ -52,7 +96,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION DETOK_DOB(token VARCHAR)
         'X-Operation' = 'detokenize_partial',
         'X-Data-Type' = 'DOB'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_SSN(token VARCHAR)
@@ -62,7 +128,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION DETOK_SSN(token VARCHAR)
         'X-Operation' = 'detokenize',
         'X-Data-Type' = 'SSN'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_SSN_PARTIAL(token VARCHAR)
@@ -72,7 +160,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION DETOK_SSN_PARTIAL(token VARCHAR)
         'X-Operation' = 'detokenize_partial',
         'X-Data-Type' = 'SSN'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION DETOK_EMAIL(token VARCHAR)
@@ -82,7 +192,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION DETOK_EMAIL(token VARCHAR)
         'X-Operation' = 'detokenize',
         'X-Data-Type' = 'EMAIL'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 -- ============================================================================
@@ -99,7 +231,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION TOK_NAME(plaintext VARCHAR)
         'X-Operation' = 'tokenize',
         'X-Data-Type' = 'NAME'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_ID(plaintext VARCHAR)
@@ -109,7 +263,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION TOK_ID(plaintext VARCHAR)
         'X-Operation' = 'tokenize',
         'X-Data-Type' = 'ID'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_DOB(plaintext VARCHAR)
@@ -119,7 +295,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION TOK_DOB(plaintext VARCHAR)
         'X-Operation' = 'tokenize_partial',
         'X-Data-Type' = 'DOB'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_SSN(plaintext VARCHAR)
@@ -129,7 +327,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION TOK_SSN(plaintext VARCHAR)
         'X-Operation' = 'tokenize',
         'X-Data-Type' = 'SSN'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_SSN_PARTIAL(plaintext VARCHAR)
@@ -139,7 +359,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION TOK_SSN_PARTIAL(plaintext VARCHAR)
         'X-Operation' = 'tokenize_partial',
         'X-Data-Type' = 'SSN'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_EMAIL(plaintext VARCHAR)
@@ -149,7 +391,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION TOK_EMAIL(plaintext VARCHAR)
         'X-Operation' = 'tokenize',
         'X-Data-Type' = 'EMAIL'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 -- ============================================================================
@@ -178,7 +442,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION TOK_ONEWAY_NAME(plaintext VARCHAR)
         'X-Operation' = 'tokenize_oneway',
         'X-Data-Type' = 'NAME'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_ONEWAY_ID(plaintext VARCHAR)
@@ -188,7 +474,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION TOK_ONEWAY_ID(plaintext VARCHAR)
         'X-Operation' = 'tokenize_oneway',
         'X-Data-Type' = 'ID'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_ONEWAY_DOB(plaintext VARCHAR)
@@ -198,7 +506,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION TOK_ONEWAY_DOB(plaintext VARCHAR)
         'X-Operation' = 'tokenize_oneway',
         'X-Data-Type' = 'DOB'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION TOK_ONEWAY_SSN(plaintext VARCHAR)
@@ -208,7 +538,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION TOK_ONEWAY_SSN(plaintext VARCHAR)
         'X-Operation' = 'tokenize_oneway',
         'X-Data-Type' = 'SSN'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 -- ============================================================================
@@ -230,7 +582,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION BYOT_NAME(plaintext VARCHAR, custom_token VA
         'X-Operation' = 'byot',
         'X-Data-Type' = 'NAME'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION BYOT_ID(plaintext VARCHAR, custom_token VARCHAR)
@@ -240,7 +614,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION BYOT_ID(plaintext VARCHAR, custom_token VARC
         'X-Operation' = 'byot',
         'X-Data-Type' = 'ID'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION BYOT_DOB(plaintext VARCHAR, custom_token VARCHAR)
@@ -250,7 +646,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION BYOT_DOB(plaintext VARCHAR, custom_token VAR
         'X-Operation' = 'byot',
         'X-Data-Type' = 'DOB'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 CREATE OR REPLACE EXTERNAL FUNCTION BYOT_SSN(plaintext VARCHAR, custom_token VARCHAR)
@@ -260,7 +678,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION BYOT_SSN(plaintext VARCHAR, custom_token VAR
         'X-Operation' = 'byot',
         'X-Data-Type' = 'SSN'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 -- ============================================================================
@@ -301,7 +741,29 @@ CREATE OR REPLACE EXTERNAL FUNCTION SKYFLOW_QUERY(sql_query VARCHAR)
     HEADERS = (
         'X-Operation' = 'query'
     )
-    CONTEXT_HEADERS = (CURRENT_USER, CURRENT_ROLE, CURRENT_ACCOUNT, CURRENT_IP_ADDRESS)
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
 -- ============================================================================
@@ -469,12 +931,37 @@ SHOW FUNCTIONS LIKE 'SKYFLOW_QUERY%';
 -- - This provides audit trail and enables role-based authorization in Lambda
 --
 -- Headers sent to Lambda (Snowflake prepends 'sf-custom-' and 'sf-context-' prefixes):
--- - sf-custom-x-operation: tokenize | detokenize | tokenize_oneway
+--
+-- Control Headers (sf-custom-*):
+-- - sf-custom-x-operation: tokenize | detokenize | tokenize_oneway | byot | query
 -- - sf-custom-x-data-type: NAME | ID | DOB | SSN | EMAIL
+--
+-- Context Headers (sf-context-*, all available Snowflake context functions):
 -- - sf-context-current-user: <calling Snowflake user>
 -- - sf-context-current-role: <calling Snowflake role>
 -- - sf-context-current-account: <Snowflake account identifier>
 -- - sf-context-current-ip-address: <caller IP address>
+-- - sf-context-current-client: <Snowflake client/driver>
+-- - sf-context-current-database: <current database>
+-- - sf-context-current-date: <current date>
+-- - sf-context-current-region: <Snowflake region>
+-- - sf-context-current-schema: <current schema>
+-- - sf-context-current-schemas: <current schemas list>
+-- - sf-context-current-session: <session ID>
+-- - sf-context-current-statement: <statement ID>
+-- - sf-context-current-time: <current time>
+-- - sf-context-current-timestamp: <current timestamp>
+-- - sf-context-current-transaction: <transaction ID>
+-- - sf-context-current-version: <Snowflake version>
+-- - sf-context-current-warehouse: <warehouse name>
+-- - sf-context-last-query-id: <last query ID>
+-- - sf-context-last-transaction: <last transaction ID>
+-- - sf-context-localtime: <local time>
+-- - sf-context-localtimestamp: <local timestamp>
+--
+-- Note: Snowflake automatically sends Base64-encoded versions of each context header
+-- (e.g., sf-context-current-user-base64). These are automatically filtered out by Lambda
+-- to avoid duplicate data in Skyflow audit logs. Only non-Base64 versions are forwarded.
 --
 -- Tokenization:
 -- - Uses upsert mode: Same value returns same token (idempotent)
