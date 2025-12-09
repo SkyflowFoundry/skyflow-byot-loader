@@ -23,5 +23,8 @@
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.645.0",
     "skyflow-node": "^2.0.2"
+  },
+  "overrides": {
+    "jws": "3.2.3"
   }
 }
