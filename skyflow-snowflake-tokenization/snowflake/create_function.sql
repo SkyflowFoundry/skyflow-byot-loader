@@ -703,6 +703,38 @@ CREATE OR REPLACE EXTERNAL FUNCTION BYOT_SSN(plaintext VARCHAR, custom_token VAR
     )
     AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
 
+CREATE OR REPLACE EXTERNAL FUNCTION BYOT_EMAIL(plaintext VARCHAR, custom_token VARCHAR)
+    RETURNS VARCHAR
+    API_INTEGRATION = skyflow_api_integration
+    HEADERS = (
+        'X-Operation' = 'byot',
+        'X-Data-Type' = 'EMAIL'
+    )
+    CONTEXT_HEADERS = (
+        CURRENT_USER,
+        CURRENT_ROLE,
+        CURRENT_ACCOUNT,
+        CURRENT_IP_ADDRESS,
+        CURRENT_CLIENT,
+        CURRENT_DATABASE,
+        CURRENT_DATE,
+        CURRENT_REGION,
+        CURRENT_SCHEMA,
+        CURRENT_SCHEMAS,
+        CURRENT_SESSION,
+        CURRENT_STATEMENT,
+        CURRENT_TIME,
+        CURRENT_TIMESTAMP,
+        CURRENT_TRANSACTION,
+        CURRENT_VERSION,
+        CURRENT_WAREHOUSE,
+        LAST_QUERY_ID,
+        LAST_TRANSACTION,
+        LOCALTIME,
+        LOCALTIMESTAMP
+    )
+    AS 'https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/prod/process';
+
 -- ============================================================================
 -- Query Functions (Privacy-Preserving Analytics)
 -- ============================================================================
@@ -797,6 +829,7 @@ GRANT USAGE ON FUNCTION BYOT_NAME(VARCHAR, VARCHAR) TO ROLE YOUR_APPLICATION_ROL
 GRANT USAGE ON FUNCTION BYOT_ID(VARCHAR, VARCHAR) TO ROLE YOUR_APPLICATION_ROLE;
 GRANT USAGE ON FUNCTION BYOT_DOB(VARCHAR, VARCHAR) TO ROLE YOUR_APPLICATION_ROLE;
 GRANT USAGE ON FUNCTION BYOT_SSN(VARCHAR, VARCHAR) TO ROLE YOUR_APPLICATION_ROLE;
+GRANT USAGE ON FUNCTION BYOT_EMAIL(VARCHAR, VARCHAR) TO ROLE YOUR_APPLICATION_ROLE;
 
 -- Query function
 GRANT USAGE ON FUNCTION SKYFLOW_QUERY(VARCHAR) TO ROLE YOUR_APPLICATION_ROLE;
@@ -832,11 +865,13 @@ SELECT DETOK_EMAIL('abc123def@example.com'); -- Returns "user@example.com"
 SELECT BYOT_NAME('John Doe', 'my-custom-name-token-123');  -- Returns 'my-custom-name-token-123'
 SELECT BYOT_SSN('123-45-6789', 'my-custom-ssn-token-456'); -- Returns 'my-custom-ssn-token-456'
 SELECT BYOT_DOB('1990-01-01', '1990-05-16');  -- Returns '1990-05-16' (year preserved format)
+SELECT BYOT_EMAIL('user@example.com', 'abc123@example.com'); -- Returns 'abc123@example.com' (domain preserved)
 
 -- Verify BYOT tokens work with detokenization
 SELECT DETOK_NAME('my-custom-name-token-123');  -- Returns 'John Doe'
 SELECT DETOK_SSN('my-custom-ssn-token-456');    -- Returns '123-45-6789'
 SELECT DETOK_DOB('1990-05-16');                 -- Returns '1990-01-01'
+SELECT DETOK_EMAIL('abc123@example.com');       -- Returns 'user@example.com'
 
 -- Test with table data
 SELECT
