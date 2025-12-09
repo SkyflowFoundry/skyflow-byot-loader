@@ -1165,6 +1165,7 @@ class SkyflowClient {
             insertOptions.setReturnTokens(true);
             insertOptions.setTokenMode(TokenMode.ENABLE);
             insertOptions.setTokens(tokens);
+            insertOptions.setUpsertColumn(column);
             insertOptions.setContinueOnError(false);
 
             const response = await client.vault(vaultId).insert(insertRequest, insertOptions);
