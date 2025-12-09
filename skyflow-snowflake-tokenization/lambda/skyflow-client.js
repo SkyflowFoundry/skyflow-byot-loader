@@ -1165,6 +1165,7 @@ class SkyflowClient {
             insertOptions.setReturnTokens(true);
             insertOptions.setTokenMode(TokenMode.ENABLE);
             insertOptions.setTokens(tokens);
+            insertOptions.setUpsertColumn(column);
             insertOptions.setContinueOnError(false);
 
             const response = await client.vault(vaultId).insert(insertRequest, insertOptions);
@@ -1238,74 +1239,131 @@ class SkyflowClient {
             month_day_token: 'month_day_token'
         };
 
-        const results = [];
+        // Step 1: Validate all values and separate valid from invalid
+        const validValues = [];
+        const invalidResults = [];
 
         for (const item of values) {
-            try {
-                const dobFull = item.value;
-                const customToken = item.token;
+            const dobFull = item.value;
+            const customToken = item.token;
 
-                if (!/^\d{4}-\d{2}-\d{2}$/.test(dobFull)) {
-                    results.push({
-                        rowIndex: item.rowIndex,
-                        token: null,
-                        error: `Invalid DOB format: ${dobFull}. Expected YYYY-MM-DD`
-                    });
-                    continue;
-                }
-
-                if (!/^\d{4}-\d{2}-\d{2}$/.test(customToken)) {
-                    results.push({
-                        rowIndex: item.rowIndex,
-                        token: null,
-                        error: `Invalid custom token format: ${customToken}. Expected YYYY-MM-DD`
-                    });
-                    continue;
-                }
-
-                const dobYear = dobFull.substring(0, 4);
-                const tokenizedMonthDay = customToken.substring(5);
-
-                const insertData = [{
-                    [columns.dob_year]: dobYear,
-                    [columns.dob_full]: dobFull,
-                    [columns.month_day_token]: tokenizedMonthDay
-                }];
-
-                const tokens = [{
-                    [columns.dob_full]: customToken
-                }];
-
-                const insertRequest = new InsertRequest(table, insertData);
-                const insertOptions = new InsertOptions();
-                insertOptions.setReturnTokens(true);
-                insertOptions.setTokenMode(TokenMode.ENABLE);
-                insertOptions.setTokens(tokens);
-                insertOptions.setUpsertColumn(columns.dob_full);
-                insertOptions.setContinueOnError(false);
-
-                await client.vault(vaultId).insert(insertRequest, insertOptions);
-
-                const finalToken = `${dobYear}-${tokenizedMonthDay}`;
-
-                results.push({
-                    rowIndex: item.rowIndex,
-                    token: finalToken,
-                    error: null
-                });
-
-
-            } catch (error) {
-                console.error(`BYOT DOB failed for row ${item.rowIndex}:`, error.message);
-                results.push({
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(dobFull)) {
+                invalidResults.push({
                     rowIndex: item.rowIndex,
                     token: null,
-                    error: error.message
+                    error: `Invalid DOB format: ${dobFull}. Expected YYYY-MM-DD`
                 });
+                continue;
             }
+
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(customToken)) {
+                invalidResults.push({
+                    rowIndex: item.rowIndex,
+                    token: null,
+                    error: `Invalid custom token format: ${customToken}. Expected YYYY-MM-DD`
+                });
+                continue;
+            }
+
+            validValues.push(item);
         }
 
-        return results;
+        // Step 2: Process valid values in batches
+        const allResults = [...invalidResults];
+
+        if (validValues.length === 0) {
+            return allResults;
+        }
+
+        // Batch processing to respect TOKENIZE_BATCH_SIZE
+        if (validValues.length > this.TOKENIZE_BATCH_SIZE) {
+            const batches = [];
+            for (let i = 0; i < validValues.length; i += this.TOKENIZE_BATCH_SIZE) {
+                batches.push(validValues.slice(i, i + this.TOKENIZE_BATCH_SIZE));
+            }
+
+            // Process batches with concurrency limit
+            for (let i = 0; i < batches.length; i += this.TOKENIZE_MAX_CONCURRENCY) {
+                const batchGroup = batches.slice(i, i + this.TOKENIZE_MAX_CONCURRENCY);
+                const batchPromises = batchGroup.map(batch => this._byotDOBSingleBatch(client, vaultId, table, columns, batch));
+                const batchResults = await Promise.all(batchPromises);
+                allResults.push(...batchResults.flat());
+            }
+        } else {
+            const results = await this._byotDOBSingleBatch(client, vaultId, table, columns, validValues);
+            allResults.push(...results);
+        }
+
+        return allResults;
+    }
+
+    /**
+     * Process a single BYOT DOB batch
+     * @private
+     */
+    async _byotDOBSingleBatch(client, vaultId, table, columns, values) {
+        try {
+            // Prepare batch data
+            const insertData = values.map(item => {
+                const dobYear = item.value.substring(0, 4);
+                const tokenizedMonthDay = item.token.substring(5);
+                return {
+                    [columns.dob_year]: dobYear,
+                    [columns.dob_full]: item.value,
+                    [columns.month_day_token]: tokenizedMonthDay
+                };
+            });
+
+            const tokens = values.map(item => ({
+                [columns.dob_full]: item.token
+            }));
+
+            const insertRequest = new InsertRequest(table, insertData);
+            const insertOptions = new InsertOptions();
+            insertOptions.setReturnTokens(true);
+            insertOptions.setTokenMode(TokenMode.ENABLE);
+            insertOptions.setTokens(tokens);
+            insertOptions.setUpsertColumn(columns.dob_full);
+            insertOptions.setContinueOnError(false);
+
+            const response = await client.vault(vaultId).insert(insertRequest, insertOptions);
+
+            const insertedFields = response.insertedFields || [];
+            const errors = response.errors || [];
+            const results = [];
+
+            for (let i = 0; i < values.length; i++) {
+                const value = values[i];
+                const errorForIndex = errors.find(e => e.index === i);
+
+                if (errorForIndex) {
+                    results.push({
+                        rowIndex: value.rowIndex,
+                        token: null,
+                        error: errorForIndex.error || 'BYOT DOB failed'
+                    });
+                } else {
+                    const dobYear = value.value.substring(0, 4);
+                    const tokenizedMonthDay = value.token.substring(5);
+                    const finalToken = `${dobYear}-${tokenizedMonthDay}`;
+
+                    results.push({
+                        rowIndex: value.rowIndex,
+                        token: finalToken,
+                        error: null
+                    });
+                }
+            }
+
+            return results;
+        } catch (error) {
+            console.error(`BYOT DOB batch failed:`, error.message);
+            return values.map(v => ({
+                rowIndex: v.rowIndex,
+                token: null,
+                error: error.message || 'BYOT DOB batch failed'
+            }));
+        }
     }
 
     /**
