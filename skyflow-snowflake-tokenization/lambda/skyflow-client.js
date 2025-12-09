@@ -1127,8 +1127,35 @@ class SkyflowClient {
 
         const client = this._getOrInitializeClient();
         const { vaultId, table, column } = vault;
-        const results = [];
+        const allResults = [];
 
+        // Batch processing to respect TOKENIZE_BATCH_SIZE
+        if (values.length > this.TOKENIZE_BATCH_SIZE) {
+            const batches = [];
+            for (let i = 0; i < values.length; i += this.TOKENIZE_BATCH_SIZE) {
+                batches.push(values.slice(i, i + this.TOKENIZE_BATCH_SIZE));
+            }
+
+            // Process batches with concurrency limit
+            for (let i = 0; i < batches.length; i += this.TOKENIZE_MAX_CONCURRENCY) {
+                const batchGroup = batches.slice(i, i + this.TOKENIZE_MAX_CONCURRENCY);
+                const batchPromises = batchGroup.map(batch => this._byotSingleBatch(client, vaultId, table, column, batch));
+                const batchResults = await Promise.all(batchPromises);
+                allResults.push(...batchResults.flat());
+            }
+        } else {
+            const results = await this._byotSingleBatch(client, vaultId, table, column, values);
+            allResults.push(...results);
+        }
+
+        return allResults;
+    }
+
+    /**
+     * Process a single BYOT batch
+     * @private
+     */
+    async _byotSingleBatch(client, vaultId, table, column, values) {
         try {
             const insertData = values.map(v => ({ [column]: v.value }));
             const tokens = values.map(v => ({ [column]: v.token }));
@@ -1144,6 +1171,7 @@ class SkyflowClient {
 
             const insertedFields = response.insertedFields || [];
             const errors = response.errors || [];
+            const results = [];
 
             for (let i = 0; i < values.length; i++) {
                 const value = values[i];
@@ -1175,11 +1203,11 @@ class SkyflowClient {
 
             return results;
         } catch (error) {
-            console.error(`BYOT failed for ${dataType}:`, error.message);
+            console.error(`BYOT batch failed:`, error.message);
             return values.map(v => ({
                 rowIndex: v.rowIndex,
                 token: null,
-                error: error.message || 'BYOT failed'
+                error: error.message || 'BYOT batch failed'
             }));
         }
     }

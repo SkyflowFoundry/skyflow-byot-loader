@@ -247,6 +247,95 @@ echo -e "${GREEN}✓ AWS permissions verified${NC}"
 echo ""
 
 # ============================================================================
+# Print Sample Curl Commands Function
+# ============================================================================
+print_sample_curls() {
+    local API_URL="$1"
+
+    echo ""
+    echo -e "${BLUE}============================================================================${NC}"
+    echo -e "${BLUE}Sample curl commands for testing${NC}"
+    echo -e "${BLUE}============================================================================${NC}"
+    echo ""
+    echo -e "${YELLOW}1. Tokenize a NAME:${NC}"
+    echo -e "${GREEN}curl -X POST \"${API_URL}\" \\
+  -H \"Content-Type: application/json\" \\
+  -H \"sf-custom-x-operation: tokenize\" \\
+  -H \"sf-custom-x-data-type: NAME\" \\
+  -H \"sf-context-current-user: TESTUSER\" \\
+  -H \"sf-context-current-role: ANALYST\" \\
+  -H \"sf-context-current-account: ABC123\" \\
+  -d '{\"data\": [[0, \"John Doe\"]]}'${NC}"
+    echo ""
+    echo -e "${YELLOW}2. Detokenize a NAME (replace TOKEN with actual token):${NC}"
+    echo -e "${GREEN}curl -X POST \"${API_URL}\" \\
+  -H \"Content-Type: application/json\" \\
+  -H \"sf-custom-x-operation: detokenize\" \\
+  -H \"sf-custom-x-data-type: NAME\" \\
+  -H \"sf-context-current-user: TESTUSER\" \\
+  -H \"sf-context-current-role: ANALYST\" \\
+  -H \"sf-context-current-account: ABC123\" \\
+  -d '{\"data\": [[0, \"TOKEN\"]]}'${NC}"
+    echo ""
+    echo -e "${YELLOW}3. Tokenize an SSN:${NC}"
+    echo -e "${GREEN}curl -X POST \"${API_URL}\" \\
+  -H \"Content-Type: application/json\" \\
+  -H \"sf-custom-x-operation: tokenize\" \\
+  -H \"sf-custom-x-data-type: SSN\" \\
+  -H \"sf-context-current-user: TESTUSER\" \\
+  -H \"sf-context-current-role: ANALYST\" \\
+  -H \"sf-context-current-account: ABC123\" \\
+  -d '{\"data\": [[0, \"123-45-6789\"]]}'${NC}"
+    echo ""
+    echo -e "${YELLOW}4. Tokenize an EMAIL:${NC}"
+    echo -e "${GREEN}curl -X POST \"${API_URL}\" \\
+  -H \"Content-Type: application/json\" \\
+  -H \"sf-custom-x-operation: tokenize\" \\
+  -H \"sf-custom-x-data-type: EMAIL\" \\
+  -H \"sf-context-current-user: TESTUSER\" \\
+  -H \"sf-context-current-role: ANALYST\" \\
+  -H \"sf-context-current-account: ABC123\" \\
+  -d '{\"data\": [[0, \"user@example.com\"]]}'${NC}"
+    echo ""
+    echo -e "${YELLOW}5. Batch tokenize (multiple records):${NC}"
+    echo -e "${GREEN}curl -X POST \"${API_URL}\" \\
+  -H \"Content-Type: application/json\" \\
+  -H \"sf-custom-x-operation: tokenize\" \\
+  -H \"sf-custom-x-data-type: NAME\" \\
+  -H \"sf-context-current-user: TESTUSER\" \\
+  -H \"sf-context-current-role: ANALYST\" \\
+  -H \"sf-context-current-account: ABC123\" \\
+  -d '{\"data\": [[0, \"John Doe\"], [1, \"Jane Smith\"], [2, \"Bob Johnson\"]]}'${NC}"
+    echo ""
+    echo -e "${YELLOW}6. Round-trip test (tokenize then detokenize):${NC}"
+    echo -e "${GREEN}TOKEN=\$(curl -s -X POST \"${API_URL}\" \\
+  -H \"Content-Type: application/json\" \\
+  -H \"sf-custom-x-operation: tokenize\" \\
+  -H \"sf-custom-x-data-type: NAME\" \\
+  -H \"sf-context-current-user: TESTUSER\" \\
+  -H \"sf-context-current-role: ANALYST\" \\
+  -H \"sf-context-current-account: ABC123\" \\
+  -d '{\"data\": [[0, \"John Doe\"]]}' | jq -r '.data[0][1]')
+
+echo \"Token: \$TOKEN\"
+
+curl -s -X POST \"${API_URL}\" \\
+  -H \"Content-Type: application/json\" \\
+  -H \"sf-custom-x-operation: detokenize\" \\
+  -H \"sf-custom-x-data-type: NAME\" \\
+  -H \"sf-context-current-user: TESTUSER\" \\
+  -H \"sf-context-current-role: ANALYST\" \\
+  -H \"sf-context-current-account: ABC123\" \\
+  -d \"{\\\"data\\\": [[0, \\\"\$TOKEN\\\"]]}\" | jq '.'${NC}"
+    echo ""
+    echo -e "${YELLOW}Note:${NC} All available data types: NAME, ID, DOB, SSN, EMAIL"
+    echo -e "${YELLOW}Note:${NC} Snowflake prepends 'sf-custom-' to custom headers, 'sf-context-' to context headers"
+    echo ""
+    echo -e "${BLUE}============================================================================${NC}"
+    echo ""
+}
+
+# ============================================================================
 # Deploy Function
 # ============================================================================
 deploy() {
@@ -631,7 +720,7 @@ EOF
         --resource-id "$PROCESS_RESOURCE_ID" \
         --http-method POST \
         --authorization-type NONE \
-        --no-api-key-required 2>/dev/null || true
+        --no-api-key-required > /dev/null 2>&1 || true
 
     # Set up Lambda integration (AWS_PROXY passes headers automatically)
     aws apigateway put-integration \
@@ -640,7 +729,7 @@ EOF
         --http-method POST \
         --type AWS_PROXY \
         --integration-http-method POST \
-        --uri "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_ARN}/invocations" 2>/dev/null || true
+        --uri "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${LAMBDA_ARN}/invocations" > /dev/null 2>&1 || true
 
     echo -e "${GREEN}✓ API Gateway configured with single /process endpoint${NC}"
     echo ""
@@ -653,7 +742,7 @@ EOF
         --statement-id apigateway-invoke \
         --action lambda:InvokeFunction \
         --principal apigateway.amazonaws.com \
-        --source-arn "arn:aws:execute-api:${AWS_REGION}:${AWS_ACCOUNT_ID}:${API_ID}/*" 2>/dev/null || true
+        --source-arn "arn:aws:execute-api:${AWS_REGION}:${AWS_ACCOUNT_ID}:${API_ID}/*" > /dev/null 2>&1 || true
 
     echo -e "${GREEN}✓ Permissions granted${NC}"
     echo ""
@@ -701,7 +790,7 @@ EOF
         aws iam create-role \
             --role-name "$IAM_ROLE_NAME" \
             --assume-role-policy-document file:///tmp/snowflake-trust-policy.json \
-            --description "IAM role for Snowflake API integration"
+            --description "IAM role for Snowflake API integration" > /dev/null
 
         # Create and attach policy for API Gateway invoke
         cat > /tmp/api-invoke-policy.json <<EOF
@@ -720,7 +809,7 @@ EOF
         aws iam put-role-policy \
             --role-name "$IAM_ROLE_NAME" \
             --policy-name "APIGatewayInvokePolicy" \
-            --policy-document file:///tmp/api-invoke-policy.json
+            --policy-document file:///tmp/api-invoke-policy.json > /dev/null
 
         SNOWFLAKE_ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${IAM_ROLE_NAME}"
     fi
@@ -805,6 +894,9 @@ Configuration:
 EOF
 
     echo -e "${GREEN}Deployment info saved to: deployment-info.txt${NC}"
+
+    # Print sample curl commands
+    print_sample_curls "$API_URL"
 }
 
 # ============================================================================
@@ -871,13 +963,13 @@ destroy() {
     aws secretsmanager delete-secret \
         --secret-id "$SECRET_NAME" \
         --force-delete-without-recovery \
-        --region "$AWS_REGION" 2>/dev/null || echo "  (not found)"
+        --region "$AWS_REGION" > /dev/null 2>&1 || echo "  (not found)"
     echo -e "${GREEN}✓ Secret deleted (or scheduled for deletion)${NC}"
     echo ""
 
     # Delete Lambda function
     echo -e "${BLUE}[2/5]${NC} Deleting Lambda function..."
-    aws lambda delete-function --function-name "$LAMBDA_FUNCTION_NAME" 2>/dev/null || echo "  (not found)"
+    aws lambda delete-function --function-name "$LAMBDA_FUNCTION_NAME" > /dev/null 2>&1 || echo "  (not found)"
     echo -e "${GREEN}✓ Lambda function deleted${NC}"
     echo ""
 
@@ -885,7 +977,7 @@ destroy() {
     echo -e "${BLUE}[3/5]${NC} Deleting API Gateway..."
     API_ID=$(aws apigateway get-rest-apis --query "items[?name=='${API_NAME}'].id" --output text)
     if [ -n "$API_ID" ]; then
-        aws apigateway delete-rest-api --rest-api-id "$API_ID"
+        aws apigateway delete-rest-api --rest-api-id "$API_ID" > /dev/null 2>&1
     fi
     echo -e "${GREEN}✓ API Gateway deleted${NC}"
     echo ""
@@ -894,13 +986,13 @@ destroy() {
     echo -e "${BLUE}[4/5]${NC} Deleting IAM roles..."
 
     # Delete Lambda role
-    aws iam detach-role-policy --role-name "$LAMBDA_ROLE_NAME" --policy-arn "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole" 2>/dev/null || true
-    aws iam delete-role-policy --role-name "$LAMBDA_ROLE_NAME" --policy-name "SecretsManagerReadPolicy" 2>/dev/null || true
-    aws iam delete-role --role-name "$LAMBDA_ROLE_NAME" 2>/dev/null || echo "  (Lambda role not found)"
+    aws iam detach-role-policy --role-name "$LAMBDA_ROLE_NAME" --policy-arn "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole" > /dev/null 2>&1 || true
+    aws iam delete-role-policy --role-name "$LAMBDA_ROLE_NAME" --policy-name "SecretsManagerReadPolicy" > /dev/null 2>&1 || true
+    aws iam delete-role --role-name "$LAMBDA_ROLE_NAME" > /dev/null 2>&1 || echo "  (Lambda role not found)"
 
     # Delete Snowflake role
-    aws iam delete-role-policy --role-name "$IAM_ROLE_NAME" --policy-name "APIGatewayInvokePolicy" 2>/dev/null || true
-    aws iam delete-role --role-name "$IAM_ROLE_NAME" 2>/dev/null || echo "  (Snowflake role not found)"
+    aws iam delete-role-policy --role-name "$IAM_ROLE_NAME" --policy-name "APIGatewayInvokePolicy" > /dev/null 2>&1 || true
+    aws iam delete-role --role-name "$IAM_ROLE_NAME" > /dev/null 2>&1 || echo "  (Snowflake role not found)"
 
     echo -e "${GREEN}✓ IAM roles deleted${NC}"
     echo ""
@@ -1142,12 +1234,12 @@ EOF
     # Delete old policy if exists
     POLICY_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:policy/${POLICY_NAME}"
     if aws iam get-policy --policy-arn "$POLICY_ARN" > /dev/null 2>&1; then
-        aws iam detach-user-policy --user-name "$IAM_USERNAME" --policy-arn "$POLICY_ARN" 2>/dev/null || true
+        aws iam detach-user-policy --user-name "$IAM_USERNAME" --policy-arn "$POLICY_ARN" > /dev/null 2>&1 || true
         VERSIONS=$(aws iam list-policy-versions --policy-arn "$POLICY_ARN" --query 'Versions[?IsDefaultVersion==`false`].VersionId' --output text)
         for VERSION in $VERSIONS; do
-            aws iam delete-policy-version --policy-arn "$POLICY_ARN" --version-id "$VERSION" 2>/dev/null || true
+            aws iam delete-policy-version --policy-arn "$POLICY_ARN" --version-id "$VERSION" > /dev/null 2>&1 || true
         done
-        aws iam delete-policy --policy-arn "$POLICY_ARN" 2>/dev/null || true
+        aws iam delete-policy --policy-arn "$POLICY_ARN" > /dev/null 2>&1 || true
         sleep 2
     fi
 
@@ -1160,7 +1252,7 @@ EOF
         --output text)
 
     # Attach to user
-    aws iam attach-user-policy --user-name "$IAM_USERNAME" --policy-arn "$POLICY_ARN"
+    aws iam attach-user-policy --user-name "$IAM_USERNAME" --policy-arn "$POLICY_ARN" > /dev/null
 
     rm -f /tmp/skyflow-tokenization-policy.json
 
@@ -1363,7 +1455,7 @@ EOF
 
     aws iam update-assume-role-policy \
         --role-name "$IAM_ROLE_NAME" \
-        --policy-document file://.snowflake-trust-policy.json
+        --policy-document file://.snowflake-trust-policy.json > /dev/null
 
     echo -e "${GREEN}✓ Trust policy updated${NC}"
     echo ""
@@ -1440,18 +1532,18 @@ EOF
         exit 1
     fi
 
-    # Check if all CREATE statements succeeded (expect 21: 6 DETOK_* + 6 TOK_* + 4 TOK_ONEWAY_* + 4 BYOT_* + 1 SKYFLOW_QUERY)
+    # Check if all CREATE statements succeeded (expect 22: 6 DETOK_* + 6 TOK_* + 4 TOK_ONEWAY_* + 5 BYOT_* + 1 SKYFLOW_QUERY)
     SUCCESS_COUNT=$(echo "$FUNCTION_OUTPUT" | grep -c "successfully created")
-    if [ "$SUCCESS_COUNT" -ge 21 ]; then
-        echo -e "${GREEN}✓ All 21 functions created successfully${NC}"
+    if [ "$SUCCESS_COUNT" -ge 22 ]; then
+        echo -e "${GREEN}✓ All 22 functions created successfully${NC}"
         echo -e "${GREEN}  - DETOK_NAME, DETOK_ID, DETOK_DOB (year preserved), DETOK_SSN, DETOK_SSN_PARTIAL, DETOK_EMAIL${NC}"
         echo -e "${GREEN}  - TOK_NAME, TOK_ID, TOK_DOB (year preserved), TOK_SSN, TOK_SSN_PARTIAL, TOK_EMAIL${NC}"
         echo -e "${GREEN}  - TOK_ONEWAY_NAME, TOK_ONEWAY_ID, TOK_ONEWAY_DOB, TOK_ONEWAY_SSN${NC}"
-        echo -e "${GREEN}  - BYOT_NAME, BYOT_ID, BYOT_DOB, BYOT_SSN${NC}"
+        echo -e "${GREEN}  - BYOT_NAME, BYOT_ID, BYOT_DOB, BYOT_SSN, BYOT_EMAIL${NC}"
         echo -e "${GREEN}  - SKYFLOW_QUERY (privacy-preserving analytics)${NC}"
         rm -f .snowflake-create-function.sql
     else
-        echo -e "${YELLOW}⚠ Unexpected output (only $SUCCESS_COUNT success messages, expected 21)${NC}"
+        echo -e "${YELLOW}⚠ Unexpected output (only $SUCCESS_COUNT success messages, expected 22)${NC}"
         echo -e "${YELLOW}SQL file saved to: .snowflake-create-function.sql${NC}"
         echo ""
         echo -e "${BLUE}Output:${NC}"
@@ -1468,6 +1560,9 @@ EOF
     echo ""
     echo -e "Test with: ${BLUE}$0 --test${NC}"
     echo ""
+
+    # Print sample curl commands (API_URL already extracted from deployment-info.txt earlier)
+    print_sample_curls "$API_URL"
 }
 
 # ============================================================================
