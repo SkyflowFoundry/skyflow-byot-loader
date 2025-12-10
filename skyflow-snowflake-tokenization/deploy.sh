@@ -621,7 +621,7 @@ EOF
                 --role "$LAMBDA_ROLE_ARN" \
                 --handler handler.handler \
                 --zip-file fileb://function.zip \
-                --timeout 60 \
+                --timeout 900 \
                 --memory-size 512 \
                 --description "Skyflow tokenization and detokenization for Snowflake (env vars)" \
                 --environment file://"$ENV_JSON_FILE" \
@@ -635,7 +635,7 @@ EOF
                 --role "$LAMBDA_ROLE_ARN" \
                 --handler handler.handler \
                 --zip-file fileb://function.zip \
-                --timeout 60 \
+                --timeout 900 \
                 --memory-size 512 \
                 --description "Skyflow tokenization and detokenization for Snowflake (Secrets Manager)" \
                 --environment "Variables={SECRETS_MANAGER_SECRET_NAME=${SECRET_NAME}}" \
@@ -652,14 +652,14 @@ EOF
             # Update with environment variables from credentials.json (base64 encoded)
             aws lambda update-function-configuration \
                 --function-name "$LAMBDA_FUNCTION_NAME" \
-                --timeout 60 \
+                --timeout 900 \
                 --memory-size 512 \
                 --environment file://"$ENV_JSON_FILE" > /dev/null
         else
             # Update with Secrets Manager environment variable
             aws lambda update-function-configuration \
                 --function-name "$LAMBDA_FUNCTION_NAME" \
-                --timeout 60 \
+                --timeout 900 \
                 --memory-size 512 \
                 --environment "Variables={SECRETS_MANAGER_SECRET_NAME=${SECRET_NAME}}" > /dev/null
         fi
