@@ -81,42 +81,25 @@ async function loadFromSecretsManager() {
     if (!secretsManagerClient) {
         secretsManagerClient = new SecretsManagerClient({
             region,
-            maxAttempts: 3
+            maxAttempts: 1  // No retries - fail fast
         });
     }
 
-    const maxRetries = 3;
-    const baseDelay = 100; // milliseconds
+    // No retries - fail fast on errors
+    try {
+        const command = new GetSecretValueCommand({ SecretId: secretName });
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-            const command = new GetSecretValueCommand({ SecretId: secretName });
+        const data = await secretsManagerClient.send(command);
+        const config = JSON.parse(data.SecretString);
 
-            const data = await secretsManagerClient.send(command);
-            const config = JSON.parse(data.SecretString);
+        return normalizeConfig(config);
+    } catch (error) {
+        console.error('Failed to load from Secrets Manager:', {
+            error: error.message,
+            errorName: error.name
+        });
 
-            return normalizeConfig(config);
-        } catch (error) {
-            const isLastAttempt = attempt === maxRetries;
-            const isRetryable = error.name === 'InvalidSignatureException' ||
-                               error.name === 'ExpiredTokenException' ||
-                               error.name === 'InvalidTokenException' ||
-                               error.$metadata?.httpStatusCode >= 500;
-
-            console.error(`Failed to load from Secrets Manager (attempt ${attempt}/${maxRetries}):`, {
-                error: error.message,
-                errorName: error.name,
-                isRetryable
-            });
-
-            if (isLastAttempt || !isRetryable) {
-                throw new Error(`Failed to load configuration from Secrets Manager: ${error.message}`);
-            }
-
-            // Exponential backoff with jitter
-            const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 100;
-            await new Promise(resolve => setTimeout(resolve, delay));
-        }
+        throw new Error(`Failed to load configuration from Secrets Manager: ${error.message}`);
     }
 }
 
