@@ -636,13 +636,12 @@ class SkyflowClient {
             try {
                 // Prepare input for SDK
                 const detokenizeData = tokenObjs.map(item => ({
-                    token: item.token,
-                    redactionType: RedactionType.PLAIN_TEXT
+                    token: item.token
                 }));
                 // Call SDK
                 const detokenizeRequest = new DetokenizeRequest(detokenizeData);
                 const detokenizeOptions = new DetokenizeOptions();
-                detokenizeOptions.setContinueOnError(true);
+                detokenizeOptions.setContinueOnError(false);
                 const response = await client.vault(vaultId).detokenize(detokenizeRequest, detokenizeOptions);
                 // Parse SDK response
                 // SDK returns results in same order as input
@@ -678,11 +677,31 @@ class SkyflowClient {
                 return batchResults;
             } catch (error) {
                 console.error(`Detokenize batch failed for ${dataType}:`, error.message);
-                return tokenObjs.map(item => ({
-                    token: item.token,
-                    value: null,
-                    error: error.message || 'Token not found'
-                }));
+
+                // Check if this is a 4xx client error by message pattern (SDK doesn't populate status codes consistently)
+                const errorMessage = (error.message || '').toLowerCase();
+                const is4xxError = errorMessage.includes('insufficient permissions') ||
+                                  errorMessage.includes('not found') ||
+                                  errorMessage.includes('unauthorized') ||
+                                  errorMessage.includes('forbidden') ||
+                                  errorMessage.includes('invalid token') ||
+                                  errorMessage.includes('bad request');
+
+                if (is4xxError) {
+                    // For 4xx errors, return original token as value (token is likely not valid or not found)
+                    return tokenObjs.map(item => ({
+                        token: item.token,
+                        value: item.token,
+                        error: null
+                    }));
+                } else {
+                    // For 5xx or network errors, return error
+                    return tokenObjs.map(item => ({
+                        token: item.token,
+                        value: null,
+                        error: error.message || 'Token not found'
+                    }));
+                }
             }
         };
 
@@ -738,13 +757,12 @@ class SkyflowClient {
         try {
             // Prepare detokenize request for SDK
             const detokenizeData = tokens.map(item => ({
-                token: item.token,
-                redactionType: RedactionType.PLAIN_TEXT
+                token: item.token
             }));
 
             const detokenizeRequest = new DetokenizeRequest(detokenizeData);
             const detokenizeOptions = new DetokenizeOptions();
-            detokenizeOptions.setContinueOnError(true);
+            detokenizeOptions.setContinueOnError(false);
 
             const startTime = Date.now();
             const response = await client.vault(vaultId).detokenize(detokenizeRequest, detokenizeOptions);
@@ -756,11 +774,31 @@ class SkyflowClient {
 
         } catch (error) {
             console.error(`Detokenization failed for ${dataType}:`, error.message);
-            return tokens.map(t => ({
-                rowIndex: t.rowIndex,
-                value: null,
-                error: error.message
-            }));
+
+            // Check if this is a 4xx client error by message pattern (SDK doesn't populate status codes consistently)
+            const errorMessage = (error.message || '').toLowerCase();
+            const is4xxError = errorMessage.includes('insufficient permissions') ||
+                              errorMessage.includes('not found') ||
+                              errorMessage.includes('unauthorized') ||
+                              errorMessage.includes('forbidden') ||
+                              errorMessage.includes('invalid token') ||
+                              errorMessage.includes('bad request');
+
+            if (is4xxError) {
+                // For 4xx errors, return original token as value (token is likely not valid or not found)
+                return tokens.map(t => ({
+                    rowIndex: t.rowIndex,
+                    value: t.token,
+                    error: null
+                }));
+            } else {
+                // For 5xx or network errors, return error
+                return tokens.map(t => ({
+                    rowIndex: t.rowIndex,
+                    value: null,
+                    error: error.message
+                }));
+            }
         }
     }
 
@@ -1740,10 +1778,20 @@ class SkyflowClient {
 
             } catch (error) {
                 console.error(`DOB Partial detokenization failed for ${item.token}:`, error.message);
+
+                // Check if this is a 4xx client error by message pattern
+                const errorMessage = (error.message || '').toLowerCase();
+                const is4xxError = errorMessage.includes('insufficient permissions') ||
+                                  errorMessage.includes('not found') ||
+                                  errorMessage.includes('unauthorized') ||
+                                  errorMessage.includes('forbidden') ||
+                                  errorMessage.includes('invalid token') ||
+                                  errorMessage.includes('bad request');
+
                 results.push({
                     rowIndex: item.rowIndex,
-                    value: null,
-                    error: error.message
+                    value: is4xxError ? item.token : null,
+                    error: is4xxError ? null : error.message
                 });
             }
         }
@@ -1818,10 +1866,20 @@ class SkyflowClient {
 
             } catch (error) {
                 console.error(`SSN Partial detokenization failed for ${item.token}:`, error.message);
+
+                // Check if this is a 4xx client error by message pattern
+                const errorMessage = (error.message || '').toLowerCase();
+                const is4xxError = errorMessage.includes('insufficient permissions') ||
+                                  errorMessage.includes('not found') ||
+                                  errorMessage.includes('unauthorized') ||
+                                  errorMessage.includes('forbidden') ||
+                                  errorMessage.includes('invalid token') ||
+                                  errorMessage.includes('bad request');
+
                 results.push({
                     rowIndex: item.rowIndex,
-                    value: null,
-                    error: error.message
+                    value: is4xxError ? item.token : null,
+                    error: is4xxError ? null : error.message
                 });
             }
         }
