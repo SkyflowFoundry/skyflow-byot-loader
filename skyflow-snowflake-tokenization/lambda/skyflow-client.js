@@ -1742,18 +1742,22 @@ class SkyflowClient {
             try {
                 const partialToken = item.token;
 
-                if (!/^\d{4}-\d{2}-\d{2}$/.test(partialToken)) {
+                if (!/^\d{4}-/.test(partialToken)) {
                     results.push({
                         rowIndex: item.rowIndex,
                         value: null,
-                        error: `Invalid partial token format: ${partialToken}. Expected YYYY-MM-DD`
+                        error: `Invalid partial token format: ${partialToken}. Expected YYYY-<token>`
                     });
                     continue;
                 }
 
+                // PRESERVE THE YEAR from input token (this is the plaintext year)
+                const inputYear = partialToken.substring(0, 4);
                 const monthDayToken = partialToken.substring(5);
 
-                const query = `SELECT dob_full FROM ${table} WHERE month_day_token = '${monthDayToken}'`;
+                // Query by both year AND month_day_token for exact match
+                // Fallback to just month_day_token if no exact match (for backwards compatibility)
+                const query = `SELECT dob_full FROM ${table} WHERE month_day_token = '${monthDayToken}' AND dob_year = '${inputYear}' LIMIT 1`;
                 const queryRequest = new QueryRequest(query);
 
                 const response = await client.vault(vaultId).query(queryRequest);
@@ -1769,9 +1773,13 @@ class SkyflowClient {
                 }
 
                 const dobFull = fields[0].dob_full;
+                // Extract month-day from vault result and combine with INPUT year (year should never change)
+                const detokenizedMonthDay = dobFull.substring(5);  // Get MM-DD from vault
+                const finalResult = `${inputYear}-${detokenizedMonthDay}`;  // Preserve input year!
+
                 results.push({
                     rowIndex: item.rowIndex,
-                    value: dobFull,
+                    value: finalResult,
                     error: null
                 });
 
@@ -1841,7 +1849,7 @@ class SkyflowClient {
                 const first5Token = partialToken.substring(0, 6);
                 const last4 = partialToken.substring(7);
 
-                const query = `SELECT ssn_full FROM ${table} WHERE ssn_first5_token = '${first5Token}' AND ssn_last4 = '${last4}'`;
+                const query = `SELECT ssn_full FROM ${table} WHERE ssn_first5_token = '${first5Token}' AND ssn_last4 = '${last4}' LIMIT 1`;
                 const queryRequest = new QueryRequest(query);
 
                 const response = await client.vault(vaultId).query(queryRequest);
