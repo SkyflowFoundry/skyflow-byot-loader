@@ -1756,8 +1756,7 @@ class SkyflowClient {
                 const monthDayToken = partialToken.substring(5);
 
                 // Query by both year AND month_day_token for exact match
-                // Fallback to just month_day_token if no exact match (for backwards compatibility)
-                const query = `SELECT dob_full FROM ${table} WHERE month_day_token = '${monthDayToken}' AND dob_year = '${inputYear}' LIMIT 1`;
+                const query = `SELECT dob_full FROM ${table} WHERE month_day_token = '${monthDayToken}' AND dob_year = '${inputYear}'`;
                 const queryRequest = new QueryRequest(query);
 
                 const response = await client.vault(vaultId).query(queryRequest);
@@ -1849,7 +1848,7 @@ class SkyflowClient {
                 const first5Token = partialToken.substring(0, 6);
                 const last4 = partialToken.substring(7);
 
-                const query = `SELECT ssn_full FROM ${table} WHERE ssn_first5_token = '${first5Token}' AND ssn_last4 = '${last4}' LIMIT 1`;
+                const query = `SELECT ssn_full FROM ${table} WHERE ssn_first5_token = '${first5Token}' AND ssn_last4 = '${last4}'`;
                 const queryRequest = new QueryRequest(query);
 
                 const response = await client.vault(vaultId).query(queryRequest);
