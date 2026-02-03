@@ -1,6 +1,9 @@
 # Configuration with sensitive data
 config.json
 
+# Snowflake Lambda configuration files with credentials
+skyflow-config*
+
 # Compiled binaries
 skyflow-loader
 clear-vaults
